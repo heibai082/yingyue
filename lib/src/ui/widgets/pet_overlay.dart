@@ -6,15 +6,25 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../data/pet_mood.dart';
+import '../../data/pet_ai.dart';
 import '../../data/pet_store.dart';
+import '../../data/prefs.dart';
 
 /// 全局悬浮桌宠：可拖动、点击互动（换表情 + 台词 + 亲密度 +1）。
 ///
 /// 通过 MaterialApp 的 builder 覆盖层承载，任何页面（除阅读器内）都能看到。
 class PetOverlay extends StatefulWidget {
-  const PetOverlay({super.key, required this.pet, this.hostReady});
+  const PetOverlay({
+    super.key,
+    required this.pet,
+    this.prefs,
+    this.hostReady,
+  });
 
   final PetStore pet;
+
+  /// App 设置（AI 接口地址 / 模型 / Key 都在这里）；为空时桌宠只用本地台词。
+  final AppPrefs? prefs;
 
   /// 宿主就绪开关（开屏 / 权限页时不显示）。
   final ValueListenable<bool>? hostReady;
@@ -63,6 +73,9 @@ class _PetOverlayState extends State<PetOverlay>
   Timer? _greetTimer;
   String? _line;
   int _faceIndex = 0;
+
+  /// 台词现编（走「小樱」的 AI 接口；失败回落本地台词）。
+  final PetAi _petAi = PetAi();
 
   /// 最近一次互动时间（用于判断打瞌睡）。
   DateTime _lastInteractionAt = DateTime.now();
@@ -165,6 +178,7 @@ class _PetOverlayState extends State<PetOverlay>
     _bobber.dispose();
     _celebrate.dispose();
     _hearts.dispose();
+    _petAi.dispose();
     super.dispose();
   }
 
@@ -646,9 +660,31 @@ class _PetOverlayState extends State<PetOverlay>
           _showLine('亲密度升级！现在是「${widget.pet.levelName}」啦 🎉');
         } else {
           _playNudge();
-          _showLine(_pickLine(petHopLines));
+          // 开了「让小樱用 AI 说话」且配了接口：现编一句，失败回落本地台词
+          _speak('被戳了一下', _pickLine(petHopLines));
         }
     }
+  }
+
+  /// 让小樱（AI）说一句；没开 / 没配 / 请求失败都用 [fallback]。
+  void _speak(String situation, String fallback) {
+    final prefs = widget.prefs;
+    if (prefs == null || !widget.pet.aiTalk || !PetAi.configured(prefs)) {
+      _showLine(fallback);
+      return;
+    }
+    _showLine('小樱正在想…');
+    unawaited(_speakAsync(prefs, situation, fallback));
+  }
+
+  Future<void> _speakAsync(
+    AppPrefs prefs,
+    String situation,
+    String fallback,
+  ) async {
+    final line = await _petAi.line(prefs: prefs, situation: situation);
+    if (!mounted) return;
+    _showLine(line ?? fallback);
   }
 
   /// 从台词池随机取一句。
@@ -669,9 +705,10 @@ class _PetOverlayState extends State<PetOverlay>
       _playCelebrate();
       _showLine('亲密度升级！现在是「${widget.pet.levelName}」啦 🎉');
     } else {
-      _showLine(
+      _speak(
+        '被摸头了',
         '${_petPatLines[DateTime.now().microsecond % _petPatLines.length]}'
-        '（+$kPetPatPoints）',
+            '（+$kPetPatPoints）',
       );
     }
   }
@@ -1160,6 +1197,15 @@ class _PetPanelPageState extends State<_PetPanelPage> {
                 subtitle: const Text('呼吸、弹跳和表情过渡；关闭后减少运动'),
                 value: pet.motionEnabled,
                 onChanged: pet.setMotionEnabled,
+              ),
+              SwitchListTile(
+                title: const Text('让小樱用 AI 说话'),
+                subtitle: const Text(
+                  '点我 / 摸头时现编一句（走「设置 → AI 助手」里的接口）；'
+                  '没配或请求失败就回落到本地台词',
+                ),
+                value: pet.aiTalk,
+                onChanged: pet.setAiTalk,
               ),
               TextButton.icon(
                 onPressed: () {

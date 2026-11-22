@@ -1,4 +1,4 @@
-// 桌宠 · 亲密度养成系统：数据层。
+﻿// 桌宠 · 亲密度养成系统：数据层。
 //
 // - 亲密度：点击互动 / 投喂食物增长，7 级阶梯（初遇 → 挚爱）；
 // - 食物：只通过阅读时长获得（20min 樱饼 / 1h 团子 / 5h 大福 / 20h 蛋糕），
@@ -187,6 +187,9 @@ class PetStore extends ChangeNotifier with ReliablePersistence {
   /// 只是不显示，亲密度、投喂记录、点心背包都保留，随时可以再打开。
   bool petHidden = false;
   bool quiet = false;
+
+  /// 台词交给小樱（AI）现编；没配 AI 或请求失败时自动回落到本地台词。
+  bool aiTalk = true;
   bool motionEnabled = true;
   int pausedUntil = 0;
   String activity = 'idle';
@@ -194,6 +197,13 @@ class PetStore extends ChangeNotifier with ReliablePersistence {
   bool get paused => DateTime.now().millisecondsSinceEpoch < pausedUntil;
   void setQuiet(bool value) {
     quiet = value;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setAiTalk(bool value) {
+    if (aiTalk == value) return;
+    aiTalk = value;
     _saveSoon();
     notifyListeners();
   }
@@ -300,6 +310,7 @@ class PetStore extends ChangeNotifier with ReliablePersistence {
           petY = ((data['petY'] as num?)?.toDouble() ?? 0.62).clamp(0.0, 1.0);
           showPetInReader = data['showPetInReader'] as bool? ?? false;
           quiet = data['quiet'] as bool? ?? false;
+          aiTalk = data['aiTalk'] as bool? ?? true;
           motionEnabled = data['motionEnabled'] as bool? ?? true;
           pausedUntil = (data['pausedUntil'] as num?)?.toInt() ?? 0;
           petHidden =
@@ -366,6 +377,7 @@ class PetStore extends ChangeNotifier with ReliablePersistence {
         'showPetInReader': showPetInReader,
         'petHidden': petHidden,
         'quiet': quiet,
+        'aiTalk': aiTalk,
         'motionEnabled': motionEnabled,
         'pausedUntil': pausedUntil,
       }),

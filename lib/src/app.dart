@@ -80,6 +80,7 @@ class SakuraApp extends StatelessWidget {
                                       ? const SizedBox.shrink()
                                       : PetOverlay(
                                           pet: petStore,
+                                          prefs: prefs,
                                           hostReady: kPetHostReady,
                                         ),
                                 ),

@@ -27,6 +27,8 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
   static const _presets = <(String, String, String)>[
     ('OpenAI', 'https://api.openai.com/v1', 'gpt-4o-mini'),
     ('DeepSeek', 'https://api.deepseek.com/v1', 'deepseek-chat'),
+    // 自己的 NAS 代理（workbuddy 面板里配的那套）：DeepSeek V4.1 Flash
+    ('NAS · DS4.1', 'https://ca.130824.xyz:3824/v1', 'deepseek-v4.1-flash'),
     ('Kimi', 'https://api.moonshot.cn/v1', 'moonshot-v1-8k'),
     ('Ollama 本地', 'http://127.0.0.1:11434/v1', 'qwen2.5:7b'),
   ];

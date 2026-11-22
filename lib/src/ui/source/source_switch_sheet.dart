@@ -1,7 +1,9 @@
-// 换源面板：为一本在线书（书架 / 阅读中）重新搜索并切换到新的书源。
+﻿// 换源面板：为一本在线书（书架 / 阅读中）重新搜索并切换到新的书源。
 //
 // 流程：自动用当前书名搜索所有启用书源 → 按相关性排序展示候选
 // → 选择后先拉取详情/目录校验，再切换（保留阅读进度，清空旧源章节缓存）。
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../data/book_store.dart';
@@ -70,6 +72,14 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
   int? _busyIndex;
   bool _fromCache = false;
 
+  // ---- 搜索进度（以前只有个转圈，几百个源要等十几分钟，看着像卡死）----
+  int _searched = 0;
+  int _total = 0;
+  int _found = 0;
+  bool _stopped = false;
+  DateTime? _startedAt;
+  Timer? _ticker;
+
   String get _cacheKey => '${widget.book.title}|${widget.book.author}';
 
   @override
@@ -77,6 +87,8 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
     super.initState();
     _bootstrap();
   }
+
+
 
   OnlineRepo? _repo;
   Future<void> _bootstrap() async {
@@ -132,50 +144,68 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
         });
         return;
       }
-      final repo = _repo = OnlineRepo(store: widget.sourceStore);
-      final results = await repo.searchAll(widget.book.title);
-      if (!mounted) return;
-
-      final all = <_Candidate>[];
+      final repo = _repo = OnlineRepo(
+        store: widget.sourceStore,
+        perSourceTimeout: const Duration(seconds: 10),
+      );
       final seen = <String>{};
-      var order = 0;
-      for (final r in results) {
-        if (!r.ok) continue;
-        for (final b in r.books) {
-          final url = (b.bookUrl ?? '').trim();
-          if (url.isEmpty) continue;
-          if (!seen.add('${r.source.bookSourceUrl}|$url')) continue;
-          all.add(
-            _Candidate(
-              r.source,
-              b,
-              bookRelevanceScore(b, widget.book.title),
-              order++,
-            ),
-          );
+      var good = 0;
+      // 兜底：25 秒还没搜完，就先展示已经找到的，别让用户干等
+      final deadline = Timer(const Duration(seconds: 25), () {
+        if (mounted && _searching) {
+          _stopped = true;
+          repo.cancel();
         }
-      }
-      all.sort((a, b) {
-        final c = b.score.compareTo(a.score);
-        if (c != 0) return c;
-        return a.order.compareTo(b.order);
       });
-      // 只保留与书名 / 作者沾边的候选，避免展示无关书
-      final related = [
-        for (final c in all)
-          if (c.score >= 480) c,
-      ];
-      final list = related.isNotEmpty ? related : all;
+      // 边搜边显示：哪个源先回来就先摆出来
+      await repo.searchAll(
+        widget.book.title,
+        onSourceDone: (r) {
+          if (!mounted) return;
+          _searched++;
+          if (r.ok) {
+            for (final b in r.books) {
+              final url = (b.bookUrl ?? '').trim();
+              if (url.isEmpty) continue;
+              if (!seen.add('${r.source.bookSourceUrl}|$url')) continue;
+              final score = bookRelevanceScore(b, widget.book.title);
+              // 只收与书名 / 作者沾边的候选，避免展示无关书
+              if (score < 480) continue;
+              _candidates = [
+                ..._candidates,
+                _Candidate(r.source, b, score, _candidates.length),
+              ];
+              good++;
+            }
+            if (good > 0) {
+              _candidates = [..._candidates]
+                ..sort((a, b) => b.score.compareTo(a.score));
+            }
+          }
+          _found = _candidates.length;
+          setState(() {});
+          // 够换源用了就别再拿死源浪费时间
+          if (good >= 6) {
+            _stopped = true;
+            repo.cancel();
+          }
+        },
+      );
+      deadline.cancel();
+      _ticker?.cancel();
       if (!mounted) return;
       setState(() {
         _searching = false;
         _fromCache = false;
-        _candidates = list;
-        if (list.isEmpty) _error = '没有找到可用的换源结果';
+        if (_candidates.isEmpty) {
+          _error = _stopped
+              ? '搜了 $_searched 个源没找到可换的来源，稍后点右上角 ⟳ 再试'
+              : '没有找到可用的换源结果';
+        }
       });
-      if (list.isNotEmpty) {
+      if (_candidates.isNotEmpty) {
         await SourceCacheStore.instance.put(_cacheKey, [
-          for (final c in list)
+          for (final c in _candidates)
             CachedCandidate(
               sourceUrl: c.source.bookSourceUrl,
               name: c.name,
@@ -187,6 +217,7 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
         ]);
       }
     } catch (e) {
+      _ticker?.cancel();
       if (!mounted) return;
       setState(() {
         _searching = false;
@@ -390,19 +421,61 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
 
   Widget _buildList(BuildContext context, ColorScheme scheme) {
     if (_searching) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 14),
-            Text('正在搜索可用书源…', style: TextStyle(fontSize: 13)),
-          ],
-        ),
+      final elapsed = _startedAt == null
+          ? 0
+          : DateTime.now().difference(_startedAt!).inSeconds;
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 8, 6),
+            child: Row(
+              children: [
+                const SizedBox(
+                  width: 13,
+                  height: 13,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '已搜 $_searched/$_total 个源 · 找到 $_found 个候选 · ${elapsed}s'
+                    '${_stopped ? '（提前收工）' : ''}',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _stopped
+                      ? null
+                      : () {
+                          setState(() => _stopped = true);
+                          _repo?.cancel();
+                        },
+                  child: const Text('停止', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+            ),
+          ),
+          if (_total > 0)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: (_searched / _total).clamp(0.0, 1.0),
+                  minHeight: 5,
+                ),
+              ),
+            ),
+          const SizedBox(height: 8),
+          Expanded(child: _candidateList(context, scheme)),
+        ],
       );
     }
     final error = _error;
-    if (error != null) {
+    if (error != null && _candidates.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -411,6 +484,18 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 13, height: 1.6),
           ),
+        ),
+      );
+    }
+    return _candidateList(context, scheme);
+  }
+
+  Widget _candidateList(BuildContext context, ColorScheme scheme) {
+    if (_candidates.isEmpty) {
+      return Center(
+        child: Text(
+          _searching ? '正在搜索可用书源…' : '没有找到可用的换源结果',
+          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
         ),
       );
     }
