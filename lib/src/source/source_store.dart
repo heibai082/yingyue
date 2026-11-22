@@ -175,6 +175,45 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
     return removed;
   }
 
+  // ---------- 体检结果 ----------
+
+  /// 记一次体检结果并落盘，返回「累计连续失败次数」。
+  ///
+  /// - 成功：失败计数清零、清掉错误原因；
+  /// - 失败：计数 +1，记下原因与时间（跨启动累计，见书源体检页）。
+  int noteHealth(String url, {required bool ok, String? error, DateTime? at}) {
+    final i = _sources.indexWhere((s) => s.bookSourceUrl == url);
+    if (i < 0) return 0;
+    final current = _sources[i];
+    final next = ok
+        ? current.copyWith(
+            healthFailCount: 0,
+            healthCheckedAt: (at ?? DateTime.now()).millisecondsSinceEpoch,
+            clearHealthError: true,
+          )
+        : current.copyWith(
+            healthFailCount: current.healthFailCount + 1,
+            healthCheckedAt: (at ?? DateTime.now()).millisecondsSinceEpoch,
+            healthError: error ?? '未知错误',
+          );
+    _sources[i] = next;
+    _saveSoon();
+    notifyListeners();
+    return next.healthFailCount;
+  }
+
+  /// 手动清除某源的失败计数（「重新相信它一次」）。
+  void clearHealth(String url) {
+    final i = _sources.indexWhere((s) => s.bookSourceUrl == url);
+    if (i < 0) return;
+    _sources[i] = _sources[i].copyWith(
+      healthFailCount: 0,
+      clearHealthError: true,
+    );
+    _saveSoon();
+    notifyListeners();
+  }
+
   // ---------- 导入 / 导出 ----------
 
   /// 从 JSON 文本导入（支持数组或单个对象；容忍 BOM 与首尾空白）。

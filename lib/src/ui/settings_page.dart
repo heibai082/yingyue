@@ -15,6 +15,7 @@ import '../platform/native_bridge.dart';
 import '../platform/tts_service.dart';
 import '../platform/url_launcher.dart';
 import '../platform/update_service.dart';
+import '../source/daily_source_sync.dart';
 import '../source/source_store.dart';
 import '../util/format.dart';
 import 'ai_chat_page.dart';
@@ -789,6 +790,47 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  /// 手动跑一次「源仓库同步 + 全量体检」，过程中用弹窗显示进度。
+  Future<void> _runSourceSyncNow(BuildContext context) async {
+    final status = ValueNotifier<String>('准备中…');
+    final navigator = Navigator.of(context);
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+          title: const Text('正在同步书源'),
+          content: ValueListenableBuilder<String>(
+            valueListenable: status,
+            builder: (_, text, _) => Text(
+              text,
+              style: const TextStyle(fontSize: 13, height: 1.6),
+            ),
+          ),
+          actions: const [SizedBox(height: 4)],
+        ),
+      ),
+    );
+    DailySourceSyncReport report;
+    try {
+      report = await DailySourceSync(
+        store: widget.sourceStore,
+        prefs: widget.prefs,
+      ).runIfDue(force: true, onProgress: (t) => status.value = t);
+    } catch (e) {
+      report = DailySourceSyncReport(ran: true, error: e.toString());
+    }
+    status.dispose();
+    if (navigator.canPop()) navigator.pop();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('书源同步：${report.summary}'),
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
   Widget _sourceCard(BuildContext context) {
     return SoftCard(
       child: Column(
@@ -814,6 +856,45 @@ class _SettingsPageState extends State<SettingsPage> {
               MaterialPageRoute(
                 builder: (_) => SourceManagerPage(store: widget.sourceStore),
               ),
+            ),
+          ),
+          // 每天首次打开：从源仓库拉新 + 全量体检（连续失败 2 次自动删除）
+          AnimatedBuilder(
+            animation: widget.prefs,
+            builder: (_, _) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  value: widget.prefs.autoSyncSources,
+                  onChanged: (v) => widget.prefs.setAutoSyncSources(v),
+                  title: const Text(
+                    '每天自动同步书源',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  subtitle: Text(
+                    widget.prefs.lastSourceSyncDay.isEmpty
+                        ? '每天首次打开：拉 24 小时内的新书源 → 全量体检（连续失败 2 次自动删）'
+                        : '上次同步 ${widget.prefs.lastSourceSyncDay} · '
+                              '拉新 → 全量体检，连续失败 2 次自动删',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.sync_rounded),
+                  title: const Text(
+                    '立即同步一次',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  subtitle: const Text(
+                    '下载源仓库的新合集 + 体检（后台进行，通知栏可看进度）',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _runSourceSyncNow(context),
+                ),
+              ],
             ),
           ),
           // 用户反馈：「书源搜索能不能设置线程，搜索太慢了」——并发数可调

@@ -177,6 +177,16 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   /// 最近一次成功备份的时间（ISO 字符串，空 = 从未备份）。
   String lastBackupAt = '';
 
+  // ---- 书源自动同步（源仓库 → 导入新合集 → 全量体检）----
+  /// 每天首次打开 App 时自动拉新书源并体检。
+  bool autoSyncSources = true;
+
+  /// 上次自动同步的日期（yyyy-MM-dd，空 = 从未跑过）。
+  String lastSourceSyncDay = '';
+
+  /// 已经处理过的源仓库合集 id（逗号分隔，避免重复下载同一个合集）。
+  String syncedHubIds = '';
+
   // ---- AI 助手（小樱） ----
   /// 兼容 OpenAI Chat Completions 的接口地址（如 https://api.openai.com/v1）。
 
@@ -372,6 +382,10 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           webdavPass = data['webdavPass'] as String? ?? '';
           webdavDir = data['webdavDir'] as String? ?? 'sakura-read/';
           lastBackupAt = data['lastBackupAt'] as String? ?? '';
+          // 书源自动同步
+          autoSyncSources = data['autoSyncSources'] as bool? ?? true;
+          lastSourceSyncDay = data['lastSourceSyncDay'] as String? ?? '';
+          syncedHubIds = data['syncedHubIds'] as String? ?? '';
           // v5：新手引导是否已看过
           guideSeen = data['guideSeen'] as bool? ?? false;
           // v6：首启使用条款
@@ -584,6 +598,30 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   void setLastBackupAt(String v) {
     if (lastBackupAt == v) return;
     lastBackupAt = v;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  /// 每天首次打开时自动同步书源（拉新 + 体检）。
+  void setAutoSyncSources(bool v) {
+    if (autoSyncSources == v) return;
+    autoSyncSources = v;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  /// 记录「哪一天已经同步过」。
+  void setSourceSyncDay(String v) {
+    if (lastSourceSyncDay == v) return;
+    lastSourceSyncDay = v;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  /// 记录处理过的源仓库合集 id。
+  void setSyncedHubIds(String v) {
+    if (syncedHubIds == v) return;
+    syncedHubIds = v;
     _saveSoon();
     notifyListeners();
   }
@@ -928,6 +966,9 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
         'webdavUser': webdavUser,
         'webdavDir': webdavDir,
         'lastBackupAt': lastBackupAt,
+        'autoSyncSources': autoSyncSources,
+        'lastSourceSyncDay': lastSourceSyncDay,
+        'syncedHubIds': syncedHubIds,
         'aiBaseUrl': aiBaseUrl,
         'aiModel': aiModel,
         'aiIncludeReading': aiIncludeReading,

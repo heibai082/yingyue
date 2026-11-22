@@ -17,6 +17,7 @@ import '../data/stats_store.dart';
 import '../platform/native_bridge.dart';
 import '../platform/open_file_service.dart';
 import '../platform/update_service.dart';
+import '../source/daily_source_sync.dart';
 import '../source/source_store.dart';
 import 'reader/reader_page.dart';
 import 'recent_page.dart';
@@ -53,6 +54,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// 启动后自动检查更新的延迟任务（见 [_scheduleAutoUpdateCheck]）。
   Timer? _updateCheckTimer;
 
+  /// 每天首次打开的「书源同步 + 全量体检」延迟任务。
+  Timer? _sourceSyncTimer;
+
   @override
   void initState() {
     super.initState();
@@ -66,6 +70,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ..listen();
     unawaited(_consumeLaunchFile());
     _scheduleAutoUpdateCheck();
+    _scheduleDailySourceSync();
     _check();
   }
 
@@ -104,6 +109,39 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (kPetGuideActive.value || kPetEggActive.value) return;
 
     await showUpdateDialog(context, info: info, isAuto: true, prefs: prefs);
+  }
+
+  // ==================== 每天首次：书源同步 + 体检 ====================
+
+  /// 每天第一次打开 App：拉源仓库 24 小时内的新合集 → 并入 → 全量体检
+  /// （同一个源连续失败 2 次会被自动删除）。
+  ///
+  /// 延迟 8 秒：避开开屏动画与首屏加载，也不跟启动时的更新检查抢网络；
+  /// 测试环境不排期（FLUTTER_TEST 下保持完全离线可复现）。
+  void _scheduleDailySourceSync() {
+    if (Platform.environment['FLUTTER_TEST'] == 'true') return;
+    final sync = DailySourceSync(
+      store: widget.sourceStore,
+      prefs: widget.prefs,
+    );
+    if (!sync.isDue()) return;
+    _sourceSyncTimer = Timer(const Duration(seconds: 8), () {
+      unawaited(_runDailySourceSync(sync));
+    });
+  }
+
+  Future<void> _runDailySourceSync(DailySourceSync sync) async {
+    if (!mounted) return;
+    if (!widget.prefs.agreementAccepted) return;
+    if (kPetGuideActive.value || kPetEggActive.value) return;
+    final report = await sync.runIfDue();
+    if (!mounted || !report.ran) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('书源自动同步：${report.summary}'),
+        duration: const Duration(seconds: 6),
+      ),
+    );
   }
 
   /// 冷启动：系统带文件启动时，取走路径并处理。
@@ -240,6 +278,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     kPetGuideReplay.removeListener(_onGuideReplay);
     kPetGuideStepId.removeListener(_onGuideStepChanged);
     _updateCheckTimer?.cancel();
+    _sourceSyncTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

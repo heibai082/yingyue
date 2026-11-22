@@ -150,10 +150,15 @@ class _SourceManagerPageState extends State<SourceManagerPage> {
             _hostOf(s.bookSourceUrl),
             if ((s.bookSourceGroup ?? '').isNotEmpty) s.bookSourceGroup!,
             if (s.searchUrl == null) '（未配置搜索）',
+            // 体检结果：连续失败会在书源体检页被自动删除
+            if (s.healthFailCount > 0) '连续失败 ${s.healthFailCount} 次',
           ].join(' · '),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 12),
+          style: TextStyle(
+            fontSize: 12,
+            color: s.healthFailCount > 0 ? scheme.error : null,
+          ),
         ),
         trailing: _bulkMode
             ? null

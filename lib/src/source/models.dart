@@ -404,6 +404,9 @@ class BookSource {
     this.lastUpdateTime,
     this.respondTime,
     this.weight = 0,
+    this.healthFailCount = 0,
+    this.healthCheckedAt = 0,
+    this.healthError,
     this.exploreUrl,
     this.exploreRule,
     this.searchUrl,
@@ -438,6 +441,16 @@ class BookSource {
   final String? lastUpdateTime;
   final String? respondTime;
   final int weight;
+
+  /// 连续体检失败次数（成功一次即清零；≥2 时自动删除，见书源体检页）。
+  final int healthFailCount;
+
+  /// 最近一次体检时间（毫秒时间戳；0 = 从未检测）。
+  final int healthCheckedAt;
+
+  /// 最近一次体检失败原因（成功时清空）。
+  final String? healthError;
+
   final String? exploreUrl;
   final ExploreRule? exploreRule;
   final String? searchUrl;
@@ -469,6 +482,9 @@ class BookSource {
     'lastUpdateTime',
     'respondTime',
     'weight',
+    'healthFailCount',
+    'healthCheckedAt',
+    'healthError',
     'exploreUrl',
     'ruleExplore',
     'searchUrl',
@@ -510,6 +526,9 @@ class BookSource {
       lastUpdateTime: _s(m['lastUpdateTime']),
       respondTime: _s(m['respondTime']),
       weight: _i(m['weight']) ?? 0,
+      healthFailCount: _i(m['healthFailCount']) ?? 0,
+      healthCheckedAt: _i(m['healthCheckedAt']) ?? 0,
+      healthError: _s(m['healthError']),
       exploreUrl: _s(m['exploreUrl']),
       exploreRule: m['ruleExplore'] == null
           ? null
@@ -550,6 +569,9 @@ class BookSource {
     if (lastUpdateTime != null) 'lastUpdateTime': lastUpdateTime,
     if (respondTime != null) 'respondTime': respondTime,
     'weight': weight,
+    if (healthFailCount > 0) 'healthFailCount': healthFailCount,
+    if (healthCheckedAt > 0) 'healthCheckedAt': healthCheckedAt,
+    if (healthError != null) 'healthError': healthError,
     if (exploreUrl != null) 'exploreUrl': exploreUrl,
     if (exploreRule != null) 'ruleExplore': exploreRule!.toJson(),
     if (searchUrl != null) 'searchUrl': searchUrl,
@@ -559,8 +581,14 @@ class BookSource {
     if (contentRule != null) 'ruleContent': contentRule!.toJson(),
   };
 
-  /// 复制并替换部分字段（当前用于启用状态切换）。
-  BookSource copyWith({bool? enabled}) => BookSource(
+  /// 复制并替换部分字段（启用状态切换 / 体检结果回写）。
+  BookSource copyWith({
+    bool? enabled,
+    int? healthFailCount,
+    int? healthCheckedAt,
+    String? healthError,
+    bool clearHealthError = false,
+  }) => BookSource(
     bookSourceUrl: bookSourceUrl,
     bookSourceName: bookSourceName,
     bookSourceGroup: bookSourceGroup,
@@ -580,6 +608,9 @@ class BookSource {
     lastUpdateTime: lastUpdateTime,
     respondTime: respondTime,
     weight: weight,
+    healthFailCount: healthFailCount ?? this.healthFailCount,
+    healthCheckedAt: healthCheckedAt ?? this.healthCheckedAt,
+    healthError: clearHealthError ? null : (healthError ?? this.healthError),
     exploreUrl: exploreUrl,
     exploreRule: exploreRule,
     searchUrl: searchUrl,

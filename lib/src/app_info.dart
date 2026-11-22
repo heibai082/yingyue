@@ -1,11 +1,11 @@
-/// 应用基本信息（版本 / 作者 / 仓库）——设置页与「关于」卡共用。
+﻿/// 应用基本信息（版本 / 作者 / 仓库）——设置页与「关于」卡共用。
 ///
 /// 版本号与 `pubspec.yaml` 的 `version` 保持同步（发版时一起改）。
 class AppInfo {
   AppInfo._();
 
   /// 语义化版本（不含 build 号）。
-  static const String version = '0.08';
+  static const String version = '0.09';
 
   /// 作者（本构建的维护者）。
   static const String author = 'heibai082';
