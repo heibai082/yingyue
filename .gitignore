@@ -98,3 +98,4 @@ android/key.properties
 android/*.jks
 android/*.keystore
 .plugin_symlinks
+.github/
