@@ -8,11 +8,11 @@ class AppInfo {
   static const String version = '0.01';
 
   /// 作者。
-  static const String author = 'akira399';
+  static const String author = 'heibai082';
 
   /// 开源仓库地址。
   // TODO: 换成你自己的仓库后，在线更新才会指向你的 release
-  static const String repo = 'https://github.com/CHANGE-ME/yingyue';
+  static const String repo = 'https://github.com/heibai082/yingyue';
 
   /// 许可证。
   static const String license = 'MIT License';
