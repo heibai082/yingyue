@@ -16,8 +16,9 @@ import 'import_fail_store.dart';
 import 'import_research.dart';
 
 /// 单本重搜的实现（测试可注入假实现）。
-typedef ResearchFn =
-    Future<ResearchResult> Function(String title, String author);
+///
+/// 传整条 [ImportFailBook]，因为里面还带着备份里的阅读位置。
+typedef ResearchFn = Future<ResearchResult> Function(ImportFailBook book);
 
 /// 全局单例：同一时间只跑一个重搜任务。
 class FailedBooksRetryController extends ChangeNotifier {
@@ -94,7 +95,7 @@ class FailedBooksRetryController extends ChangeNotifier {
 
       ResearchResult r;
       try {
-        r = await _researchFor(it.title, it.author);
+        r = await _researchFor(it);
       } catch (e) {
         r = ResearchResult(ok: false, message: '$e');
       }
@@ -123,9 +124,9 @@ class FailedBooksRetryController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<ResearchResult> _researchFor(String title, String author) {
+  Future<ResearchResult> _researchFor(ImportFailBook book) {
     final fn = _research;
-    if (fn != null) return fn(title, author);
+    if (fn != null) return fn(book);
     final shelf = _shelf;
     final sources = _sources;
     if (shelf == null || sources == null) {
@@ -134,8 +135,11 @@ class FailedBooksRetryController extends ChangeNotifier {
       );
     }
     return researchBook(
-      title: title,
-      author: author,
+      title: book.title,
+      author: book.author,
+      chapterIndex: book.chapterIndex,
+      charOffset: book.charOffset,
+      lastReadAt: book.lastReadAt,
       shelf: shelf,
       sources: sources,
     );

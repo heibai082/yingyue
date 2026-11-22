@@ -29,6 +29,8 @@ class LegadoBook {
     this.originName = '',
     this.durChapterIndex = 0,
     this.durChapterTitle = '',
+    this.durChapterPos = 0,
+    this.durChapterTime = 0,
     this.intro = '',
     this.coverUrl = '',
   });
@@ -48,6 +50,12 @@ class LegadoBook {
   /// 读到第几章（0 起）。目录可能比备份时短，入架前要夹到范围内。
   final int durChapterIndex;
   final String durChapterTitle;
+
+  /// 章节内偏移（字符数）与最后一次阅读时间（毫秒）——都是阅读 3.0 的字段，
+  /// 不带上就会出现「导进来了但进度全是 0%」。
+  final int durChapterPos;
+  final int durChapterTime;
+
   final String intro;
   final String coverUrl;
 
@@ -71,6 +79,7 @@ class LegadoImportResult {
     this.imported = 0,
     this.skipped = 0,
     this.failed = 0,
+    this.merged = 0,
     this.failures = const [],
   });
 
@@ -81,6 +90,9 @@ class LegadoImportResult {
   final int skipped;
 
   final int failed;
+
+  /// 书架里已有、这次只补回阅读进度的本数。
+  final int merged;
 
   /// 每本失败的原因，形如「《书名》：书源里没搜到对得上的书」。
   final List<String> failures;
@@ -145,6 +157,11 @@ class LegadoImporter {
           originName: _textOf(raw['originName']),
           durChapterIndex: _intOf(raw['durChapterIndex']),
           durChapterTitle: _textOf(raw['durChapterTitle']),
+          durChapterPos: _intOf(raw['durChapterPos']),
+          // 阅读 3.0 用 durChapterTime（毫秒）；老版本/其它分支可能叫 lastReadAt
+          durChapterTime: _intOf(
+            raw['durChapterTime'] != null ? raw['durChapterTime'] : raw['lastReadAt'],
+          ),
           intro: _textOf(raw['intro']),
           coverUrl: _textOf(raw['coverUrl']),
         ),
@@ -266,6 +283,7 @@ class LegadoImporter {
     var imported = 0;
     var skipped = 0;
     var failed = 0;
+    var merged = 0;
     final failures = <String>[];
 
     for (var i = 0; i < total; i++) {
@@ -274,6 +292,9 @@ class LegadoImporter {
       onCurrent?.call(target.name);
       try {
         if (knownNames.contains(key)) {
+          // 书架里已经有这本：把备份里的阅读进度补回去。
+          // 只补「空进度」，不覆盖用户在这边读到的位置。
+          if (_restoreProgress(shelf, target)) merged++;
           skipped++;
           onBookDone?.call(target.name, true);
         } else {
@@ -317,6 +338,11 @@ class LegadoImporter {
                   sourceUrl: candidate.source.bookSourceUrl,
                   chapters: info.chapters,
                   chapterIndex: chapterIndex,
+                  // 备份里的阅读位置：章节内偏移 + 最后阅读时间
+                  charOffset: target.durChapterPos,
+                  lastReadAt: target.durChapterTime > 0
+                      ? target.durChapterTime
+                      : null,
                   intro: _firstNonEmpty(
                     info.intro,
                     candidate.book.intro,
@@ -347,8 +373,31 @@ class LegadoImporter {
       imported: imported,
       skipped: skipped,
       failed: failed,
+      merged: merged,
       failures: failures,
     );
+  }
+
+  /// 把备份里的阅读位置补到「书架上已经有」的那本上。
+  ///
+  /// 只补空进度（chapterIndex 与 charOffset 都是 0），不覆盖用户在这边读到的位置。
+  /// 返回是否真的补了。
+  static bool _restoreProgress(BookStore shelf, LegadoBook target) {
+    if (target.durChapterIndex <= 0 && target.durChapterPos <= 0) return false;
+    final key = normalizeSearchText(target.name);
+    for (final book in shelf.books) {
+      if (normalizeSearchText(book.title) != key) continue;
+      if (book.chapterIndex > 0 || book.charOffset > 0) return false;
+      if (book.chapters.isEmpty) return false;
+      final chapter = target.durChapterIndex.clamp(0, book.chapters.length - 1);
+      shelf.updateProgress(
+        book.id,
+        chapter: chapter.toInt(),
+        offset: target.durChapterPos,
+      );
+      return true;
+    }
+    return false;
   }
 
   /// 搜一遍所有启用的书源，挑分数最高的候选；不够 [matchThreshold] 返回 null。

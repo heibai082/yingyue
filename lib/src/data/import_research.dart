@@ -37,11 +37,17 @@ List<BookSource> pickResearchSources(SourceStore sources, {int limit = kResearch
 ///
 /// [maxSources] 控制这一轮最多试几个源（默认 [kResearchMaxSources]），
 /// 避免拿几百个死源去撞超时。
+///
+/// [chapterIndex] / [charOffset] / [lastReadAt] 来自备份里的阅读位置：
+/// 搜到后直接落在这几项上，进度条不会又从 0% 开始。
 Future<ResearchResult> researchBook({
   required String title,
   required BookStore shelf,
   required SourceStore sources,
   String author = '',
+  int chapterIndex = 0,
+  int charOffset = 0,
+  int lastReadAt = 0,
   int maxSources = kResearchMaxSources,
   Duration bookTimeout = const Duration(seconds: 25),
 }) async {
@@ -59,7 +65,15 @@ Future<ResearchResult> researchBook({
   final scoped = SourceStore(initial: picked);
   try {
     final result = await LegadoImporter().importBooks(
-      books: [LegadoBook(name: title, author: author)],
+      books: [
+        LegadoBook(
+          name: title,
+          author: author,
+          durChapterIndex: chapterIndex,
+          durChapterPos: charOffset,
+          durChapterTime: lastReadAt,
+        ),
+      ],
       shelf: shelf,
       sources: scoped,
       bookTimeout: bookTimeout,

@@ -558,6 +558,8 @@ class _LegadoImportPageState extends State<LegadoImportPage> {
             children: [
               _stat('成功', result.imported, scheme.primary),
               _stat('已存在', result.skipped, scheme.onSurfaceVariant),
+              if (result.merged > 0)
+                _stat('补回进度', result.merged, scheme.primary),
               _stat('失败', result.failed, scheme.error),
             ],
           ),

@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 import '../../data/book_store.dart';
 import '../../data/failed_books_retry.dart';
@@ -66,16 +66,19 @@ class _FailedBooksSheetState extends State<_FailedBooksSheet> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _retryOne(String title, String author) async {
+  Future<void> _retryOne(ImportFailBook it) async {
     if (_busy != null) return;
     setState(() {
-      _busy = title;
-      _status = '正在搜索《$title》…（先试最可能可用的 $kResearchMaxSources 个源）';
+      _busy = it.title;
+      _status = '正在搜索《${it.title}》…（先试最可能可用的 $kResearchMaxSources 个源）';
       _statusOk = false;
     });
     final r = await researchBook(
-      title: title,
-      author: author,
+      title: it.title,
+      author: it.author,
+      chapterIndex: it.chapterIndex,
+      charOffset: it.charOffset,
+      lastReadAt: it.lastReadAt,
       shelf: widget.store,
       sources: widget.sources,
     );
@@ -268,7 +271,7 @@ class _FailedBooksSheetState extends State<_FailedBooksSheet> {
                                       size: 18,
                                     ),
                                     onPressed: _busy == null && !_retry.running
-                                        ? () => _retryOne(it.title, it.author)
+                                        ? () => _retryOne(it)
                                         : null,
                                   ),
                                   TextButton(

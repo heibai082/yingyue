@@ -106,7 +106,19 @@ class ImportTaskController extends ChangeNotifier {
           } else {
             fail++;
             failedTitles.add(title);
-            ImportFailStore.instance.add(title);
+            // 备份里的阅读位置要跟着记住：重新搜到之后才能回到原来那一章
+            final src = books.firstWhere(
+              (b) => b.name == title,
+              orElse: () => const LegadoBook(name: ''),
+            );
+            ImportFailStore.instance.add(
+              title,
+              author: src.author,
+              chapterIndex: src.durChapterIndex,
+              chapterTitle: src.durChapterTitle,
+              charOffset: src.durChapterPos,
+              lastReadAt: src.durChapterTime,
+            );
           }
           notifyListeners();
           ImportForeground.update('已处理 $done / $total　✅ $ok　❌ $fail');
