@@ -62,6 +62,9 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   int _lastSampleBytes = 0;
   double _speedBps = 0;
 
+  /// 当前实际走的线路（NAS / 某个镜像 / 直连），由下载服务回调告知。
+  String? _sourceLabel;
+
   /// 已下载的安装包路径（done 阶段进入系统安装器）。
   String? _apkPath;
 
@@ -82,6 +85,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       _lastSampleAt = null;
       _lastSampleBytes = 0;
       _speedBps = 0;
+      _sourceLabel = null;
     });
     final dirs = await NativeBridge.appDirs();
     final fileName = _fileNameOf(widget.info.downloadUrl);
@@ -112,6 +116,10 @@ class _UpdateDialogState extends State<_UpdateDialog> {
         });
       },
       isCancelled: () => _cancelled,
+      onSource: (label) {
+        if (!mounted) return;
+        setState(() => _sourceLabel = label);
+      },
     );
 
     if (!mounted) return;
@@ -304,8 +312,16 @@ class _UpdateDialogState extends State<_UpdateDialog> {
     final percent = _total > 0 ? (_received / _total).clamp(0.0, 1.0) : null;
     return [
       Text(
-        '正在通过国内镜像下载…',
+        _sourceLabel == null ? '正在测速选择最快线路…' : '正在通过$_sourceLabel下载…',
         style: TextStyle(fontSize: 12.5, color: scheme.onSurfaceVariant),
+      ),
+      const SizedBox(height: 2),
+      Text(
+        '多线程分块 · 线路慢了会自动换',
+        style: TextStyle(
+          fontSize: 10.5,
+          color: scheme.onSurfaceVariant.withValues(alpha: .8),
+        ),
       ),
       const SizedBox(height: 10),
       ClipRRect(

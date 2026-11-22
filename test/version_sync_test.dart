@@ -13,6 +13,25 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sakura_read/src/app_info.dart';
 
 void main() {
+  /// 语义版本归一化成 [0, 7, 0] 这种数字数组（容忍 `0.07` / `0.7.0` 两种写法）：
+  /// 短的一边按 0 补齐，再逐段比较。
+  List<int> parts(String raw) {
+    final list = raw
+        .trim()
+        .replaceFirst(RegExp(r'^[vV]'), '')
+        .split('-')
+        .first
+        .split('+')
+        .first
+        .split('.')
+        .map((p) => int.tryParse(p.trim()) ?? 0)
+        .toList();
+    while (list.length < 3) {
+      list.add(0);
+    }
+    return list;
+  }
+
   test('pubspec 与 AppInfo 的版本号必须一致', () {
     final pubspec = File('pubspec.yaml').readAsStringSync();
     final match = RegExp(
@@ -22,9 +41,11 @@ void main() {
     expect(match, isNotNull, reason: 'pubspec.yaml 里找不到 version: 行');
 
     final pubspecVersion = match!.group(1)!.split('+').first;
+    // pubspec 必须是合法 semver（`0.07` 不被 Flutter 接受），所以两边按数字比：
+    // `0.07` 与 `0.7.0` 视为同一个版本。
     expect(
-      AppInfo.version,
-      pubspecVersion,
+      parts(AppInfo.version),
+      parts(pubspecVersion),
       reason:
           '版本不同步：pubspec=$pubspecVersion，app_info=${AppInfo.version}\n'
           '发版时请同时修改两处（见 CONTRIBUTING.md「版本与发版」）。',

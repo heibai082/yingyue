@@ -1,4 +1,4 @@
-// 更新检查服务回归测试。
+﻿// 更新检查服务回归测试。
 //
 // 覆盖：
 //   - 语义版本比较（v 前缀 / 预发布后缀 / 段数不一致）；
@@ -8,6 +8,7 @@
 //   - release 说明清洗（markdown → 纯文本）。
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -318,7 +319,7 @@ void main() {
       final target = '${tmp.path}/app.apk';
       final ok = await svc.download(infoOf(), target);
       expect(ok, isFalse);
-      expect(hits, 4, reason: '四个镜像线路都应尝试过');
+      expect(hits, 5, reason: 'NAS + 四条镜像/直连线路都应尝试过');
       expect(File(target).existsSync(), isFalse);
       expect(File('$target.part').existsSync(), isFalse);
     });
@@ -350,6 +351,146 @@ void main() {
       expect(ok, isFalse);
       expect(File(target).existsSync(), isFalse);
       expect(File('$target.part').existsSync(), isFalse);
+    });
+  });
+
+  group('线路清单', () {
+    test('NAS 排最前、直连排最后（NAS 用附件同名文件）', () {
+      final svc = UpdateService(
+        client: MockClient((req) async => http.Response('', 200)),
+      );
+      final sources = svc.sourcesFor(
+        'https://github.com/a/b/releases/download/v9.9.9/x.apk',
+      );
+      expect(sources.first.label, 'NAS 镜像');
+      expect(sources.first.url, endsWith('/x.apk'));
+      expect(sources.last.label, 'GitHub 直连');
+    });
+  });
+
+  group('多线程分块下载', () {
+    late Directory tmp;
+
+    setUp(() async {
+      tmp = await Directory.systemTemp.createTemp('sakura_update_parts');
+    });
+
+    tearDown(() async {
+      try {
+        await tmp.delete(recursive: true);
+      } catch (_) {}
+    });
+
+    UpdateInfo infoOf(int size) => UpdateInfo(
+      version: '9.9.9',
+      title: 't',
+      notes: '',
+      downloadUrl: 'https://github.com/a/b/releases/download/v9.9.9/x.apk',
+      sizeBytes: size,
+      publishedAt: '',
+      pageUrl: '',
+    );
+
+    /// 假服务器：按 `bytes=a-b` 切数据返回 206 + Content-Range。
+    ///
+    /// [honorRange] 为 false 时无视 Range 直接 200 全量（模拟不支持分块的镜像）。
+    http.Client rangeServer(
+      List<int> payload, {
+      void Function(http.BaseRequest)? onRequest,
+      bool honorRange = true,
+      bool Function(http.BaseRequest)? fail,
+    }) {
+      return MockClient.streaming((req, _) async {
+        onRequest?.call(req);
+        if (fail?.call(req) == true) {
+          return http.StreamedResponse(http.ByteStream.fromBytes([]), 500);
+        }
+        final range = req.headers['Range'];
+        final match = range == null
+            ? null
+            : RegExp(r'bytes=(\d+)-(\d+)').firstMatch(range);
+        if (match == null || !honorRange) {
+          return http.StreamedResponse(
+            http.ByteStream.fromBytes(payload),
+            200,
+            contentLength: payload.length,
+          );
+        }
+        final start = int.parse(match.group(1)!);
+        final end = math.min(int.parse(match.group(2)!), payload.length - 1);
+        final slice = payload.sublist(start, end + 1);
+        return http.StreamedResponse(
+          http.ByteStream.fromBytes(slice),
+          206,
+          contentLength: slice.length,
+          headers: {'content-range': 'bytes $start-$end/${payload.length}'},
+        );
+      });
+    }
+
+    test('按 Range 分块下发：拼出的文件与原始内容一致', () async {
+      final payload = List<int>.generate(300 * 1024, (i) => i % 251);
+      final requests = <http.BaseRequest>[];
+      final svc = UpdateService(
+        client: rangeServer(payload, onRequest: requests.add),
+        connections: 4,
+        segmentThresholdBytes: 64 * 1024,
+      );
+      final target = '${tmp.path}/app.apk';
+
+      final ok = await svc.download(infoOf(payload.length), target);
+
+      expect(ok, isTrue);
+      expect(await File(target).readAsBytes(), payload);
+      expect(
+        requests.where((r) => r.headers['Range'] != null).length,
+        greaterThan(2),
+        reason: '应该是多段并发请求，而不是一条流',
+      );
+      expect(File('$target.part').existsSync(), isFalse);
+    });
+
+    test('服务器不支持 Range（200 全量）→ 退回单流，仍然成功', () async {
+      final payload = List<int>.generate(80 * 1024, (i) => (i * 7) % 253);
+      final svc = UpdateService(
+        client: rangeServer(payload, honorRange: false),
+        connections: 4,
+        segmentThresholdBytes: 64 * 1024,
+      );
+      final target = '${tmp.path}/app.apk';
+
+      final ok = await svc.download(infoOf(payload.length), target);
+
+      expect(ok, isTrue);
+      expect(await File(target).readAsBytes(), payload);
+    });
+
+    test('NAS 线路不可用 → 自动切到镜像并完成下载', () async {
+      final payload = List<int>.generate(120 * 1024, (i) => i % 197);
+      final hosts = <String>[];
+      final labels = <String>[];
+      final svc = UpdateService(
+        client: rangeServer(
+          payload,
+          onRequest: (req) => hosts.add(req.url.host),
+          fail: (req) => req.url.host == 'rakazo.130824.xyz',
+        ),
+        connections: 4,
+        segmentThresholdBytes: 64 * 1024,
+      );
+      final target = '${tmp.path}/app.apk';
+
+      final ok = await svc.download(
+        infoOf(payload.length),
+        target,
+        onSource: labels.add,
+      );
+
+      expect(ok, isTrue);
+      expect(await File(target).readAsBytes(), payload);
+      expect(hosts, contains('rakazo.130824.xyz'), reason: 'NAS 线路应被试过');
+      expect(labels, isNotEmpty);
+      expect(labels.last, isNot('NAS 镜像'), reason: 'NAS 挂了应显示换过线');
     });
   });
 
