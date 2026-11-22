@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../../data/book_store.dart';
+import '../../data/failed_books_retry.dart';
 import '../../data/import_fail_store.dart';
 import '../../data/import_research.dart';
 import '../../source/source_store.dart';
@@ -42,15 +43,34 @@ class _FailedBooksSheet extends StatefulWidget {
 }
 
 class _FailedBooksSheetState extends State<_FailedBooksSheet> {
-  String? _busy; // 正在重搜的书名
+  String? _busy; // 正在单本重搜的书名
   String? _status; // 行内提示
   bool _statusOk = false;
 
-  Future<void> _retry(String title, String author) async {
+  /// 「全部重搜」是常驻后台任务：关掉面板 / 切 App 都继续跑。
+  final _retry = FailedBooksRetryController.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _retry.addListener(_onRetryChanged);
+  }
+
+  @override
+  void dispose() {
+    _retry.removeListener(_onRetryChanged);
+    super.dispose();
+  }
+
+  void _onRetryChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _retryOne(String title, String author) async {
     if (_busy != null) return;
     setState(() {
       _busy = title;
-      _status = '正在搜索《$title》…';
+      _status = '正在搜索《$title》…（先试最可能可用的 $kResearchMaxSources 个源）';
       _statusOk = false;
     });
     final r = await researchBook(
@@ -68,37 +88,15 @@ class _FailedBooksSheetState extends State<_FailedBooksSheet> {
   }
 
   Future<void> _retryAll() async {
-    if (_busy != null) return;
-    final items = List.of(ImportFailStore.instance.items);
-    var okCount = 0;
-    for (final it in items) {
-      if (!mounted) return;
-      setState(() {
-        _busy = it.title;
-        _status = '正在搜索《${it.title}》（已成功 $okCount / ${items.length}）';
-        _statusOk = false;
-      });
-      final r = await researchBook(
-        title: it.title,
-        author: it.author,
-        shelf: widget.store,
-        sources: widget.sources,
-      );
-      if (r.ok) okCount++;
-    }
-    if (!mounted) return;
-    setState(() {
-      _busy = null;
-      _status = '全部重搜结束：成功 $okCount / ${items.length}';
-      _statusOk = okCount > 0;
-    });
+    if (_retry.running) return;
+    await _retry.startAll(shelf: widget.store, sources: widget.sources);
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return AnimatedBuilder(
-      animation: ImportFailStore.instance,
+      animation: Listenable.merge([ImportFailStore.instance, _retry]),
       builder: (ctx, _) {
         // 已经在书架上的没必要再列出来（顺手从清单删掉）
         final onShelf =
@@ -106,6 +104,12 @@ class _FailedBooksSheetState extends State<_FailedBooksSheet> {
         final items = ImportFailStore.instance.items
             .where((e) => !onShelf.contains(e.title.trim()))
             .toList();
+        final line = _retry.running
+            ? (_retry.currentTitle == null
+                  ? '准备中… ${_retry.progressText}'
+                  : '正在搜索《${_retry.currentTitle}》 · ${_retry.progressText}')
+            : (_status ?? '');
+        final lineOk = _retry.running ? true : _statusOk;
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -125,34 +129,42 @@ class _FailedBooksSheetState extends State<_FailedBooksSheet> {
                     ),
                     const Spacer(),
                     TextButton(
-                      onPressed: _busy == null && items.isNotEmpty
-                          ? _retryAll
-                          : null,
+                      onPressed: _retry.running
+                          ? null
+                          : (_busy == null && items.isNotEmpty
+                                ? _retryAll
+                                : null),
                       child: const Text('全部重搜', style: TextStyle(fontSize: 12)),
                     ),
-                    TextButton(
-                      onPressed: _busy == null && items.isNotEmpty
-                          ? () => ImportFailStore.instance.clear()
-                          : null,
-                      child: const Text('清空', style: TextStyle(fontSize: 12)),
-                    ),
+                    if (_retry.running)
+                      TextButton(
+                        onPressed: _retry.cancel,
+                        child: const Text('停止', style: TextStyle(fontSize: 12)),
+                      )
+                    else
+                      TextButton(
+                        onPressed: _busy == null && items.isNotEmpty
+                            ? () => ImportFailStore.instance.clear()
+                            : null,
+                        child: const Text('清空', style: TextStyle(fontSize: 12)),
+                      ),
                   ],
                 ),
               ),
-              if (_status != null)
+              if (line.isNotEmpty)
                 Container(
                   width: double.infinity,
                   margin: const EdgeInsets.fromLTRB(16, 0, 16, 6),
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   decoration: BoxDecoration(
-                    color: (_statusOk ? scheme.primary : scheme.error)
+                    color: (lineOk ? scheme.primary : scheme.error)
                         .withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
                     children: [
-                      if (_busy != null)
+                      if (_retry.running || _busy != null)
                         const SizedBox(
                           width: 12,
                           height: 12,
@@ -160,23 +172,50 @@ class _FailedBooksSheetState extends State<_FailedBooksSheet> {
                         )
                       else
                         Icon(
-                          _statusOk
+                          lineOk
                               ? Icons.check_circle_outline
                               : Icons.info_outline,
                           size: 14,
-                          color: _statusOk ? scheme.primary : scheme.error,
+                          color: lineOk ? scheme.primary : scheme.error,
                         ),
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          _status!,
+                          line,
                           style: TextStyle(
                             fontSize: 11.5,
-                            color: _statusOk ? scheme.primary : scheme.error,
+                            color: lineOk ? scheme.primary : scheme.error,
                           ),
                         ),
                       ),
                     ],
+                  ),
+                ),
+              if (_retry.running)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: LinearProgressIndicator(
+                      value: _retry.total == 0
+                          ? null
+                          : (_retry.done / _retry.total).clamp(0.0, 1.0),
+                      minHeight: 6,
+                    ),
+                  ),
+                ),
+              if (_retry.running)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '可以关掉这个面板或切到别的页面，任务会在后台继续（通知栏看进度）',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
                   ),
                 ),
               if (items.isEmpty)
@@ -192,10 +231,11 @@ class _FailedBooksSheetState extends State<_FailedBooksSheet> {
                   child: ListView.separated(
                     shrinkWrap: true,
                     itemCount: items.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (_, i) {
                       final it = items[i];
-                      final isBusy = _busy == it.title;
+                      final isBusy = _busy == it.title ||
+                          (_retry.running && _retry.currentTitle == it.title);
                       return ListTile(
                         dense: true,
                         title: Text(
@@ -217,13 +257,29 @@ class _FailedBooksSheetState extends State<_FailedBooksSheet> {
                                 child:
                                     CircularProgressIndicator(strokeWidth: 2),
                               )
-                            : TextButton(
-                                onPressed: _busy == null
-                                    ? () => widget.onOpenSources(
-                                        context, it.title)
-                                    : null,
-                                child: const Text('看来源',
-                                    style: TextStyle(fontSize: 12)),
+                            : Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    tooltip: '只重搜这一本',
+                                    visualDensity: VisualDensity.compact,
+                                    icon: const Icon(
+                                      Icons.refresh_rounded,
+                                      size: 18,
+                                    ),
+                                    onPressed: _busy == null && !_retry.running
+                                        ? () => _retryOne(it.title, it.author)
+                                        : null,
+                                  ),
+                                  TextButton(
+                                    onPressed: _busy == null && !_retry.running
+                                        ? () => widget.onOpenSources(
+                                            context, it.title)
+                                        : null,
+                                    child: const Text('看来源',
+                                        style: TextStyle(fontSize: 12)),
+                                  ),
+                                ],
                               ),
                       );
                     },
