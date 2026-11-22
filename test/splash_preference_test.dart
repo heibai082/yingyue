@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -31,6 +31,6 @@ void main() {
       const MaterialApp(home: SplashGate(enabled: false, child: Text('书架'))),
     );
     expect(find.text('书架'), findsOneWidget);
-    expect(find.text('樱 读'), findsNothing);
+    expect(find.text('嘤 阅'), findsNothing);
   });
 }

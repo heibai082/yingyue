@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sakura_read/src/ui/splash_gate.dart';
@@ -15,7 +15,7 @@ void main() {
     home: SplashGate(forcePlay: true, child: Scaffold(body: Text('正文'))),
   );
 
-  bool splashVisible(WidgetTester tester) => tester.any(find.text('樱 读'));
+  bool splashVisible(WidgetTester tester) => tester.any(find.text('嘤 阅'));
 
   testWidgets('开屏动画按真实帧推进，1.5 秒后消失', (tester) async {
     await tester.pumpWidget(wrap());

@@ -1,4 +1,4 @@
-// 首启「使用条款与声明」页 + 引导联动的渲染回归测试。
+﻿// 首启「使用条款与声明」页 + 引导联动的渲染回归测试。
 //
 // 回归背景：
 //   ① 首启页是新页面，文字如果没包在 Material 里，会继承 MaterialApp 最外层的
@@ -42,19 +42,19 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     // 关键内容都在
-    expect(find.text('欢迎来到樱读'), findsOneWidget);
+    expect(find.text('欢迎来到嘤阅'), findsOneWidget);
     expect(find.text('我已阅读并同意上述声明与条款'), findsOneWidget);
     expect(find.text('同意并继续'), findsOneWidget);
 
     // 标题/条款文字必须有 Material 祖先 —— 否则渲染出黄双下划线
     expect(
-      find.ancestor(of: find.text('欢迎来到樱读'), matching: find.byType(Material)),
+      find.ancestor(of: find.text('欢迎来到嘤阅'), matching: find.byType(Material)),
       findsWidgets,
       reason: '首启页标题必须位于 Material 内，否则会出现黄色双下划线',
     );
     expect(
       find.ancestor(
-        of: find.textContaining('樱读是阅读工具'),
+        of: find.textContaining('嘤阅是阅读工具'),
         matching: find.byType(Material),
       ),
       findsWidgets,

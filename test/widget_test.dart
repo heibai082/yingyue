@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -49,7 +49,7 @@ void main() {
     }
 
     expect(find.text('书架'), findsWidgets);
-    expect(find.text('樱读'), findsWidgets);
+    expect(find.text('嘤阅'), findsWidgets);
     expect(find.text('书架还空着呢'), findsWidgets);
   });
 }

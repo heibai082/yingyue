@@ -1,4 +1,4 @@
-// 首启全流程回归：条款页 → 勾选同意 → 新手引导自动开始 → 跳过落盘。
+﻿// 首启全流程回归：条款页 → 勾选同意 → 新手引导自动开始 → 跳过落盘。
 //
 // 与 agreement_gate_render_test 的差别：这里跑的是**真实 App 装配**
 // （SakuraApp + 真实的 prefs/骨架），验证「同意后引导自动开始」在真实的
@@ -62,7 +62,7 @@ void main() {
     }
 
     // 全新状态：条款页在，引导还没开始。
-    expect(find.text('欢迎来到樱读'), findsOneWidget);
+    expect(find.text('欢迎来到嘤阅'), findsOneWidget);
     expect(find.text('同意并继续'), findsOneWidget);
     expect(kPetGuideActive.value, isFalse);
 

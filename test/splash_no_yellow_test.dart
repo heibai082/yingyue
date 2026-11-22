@@ -1,4 +1,4 @@
-// 回归测试：开屏文字必须处于 Material 内。
+﻿// 回归测试：开屏文字必须处于 Material 内。
 //
 // 背景：MaterialApp 会把整棵树的根 DefaultTextStyle 设为一段“兜底样式”，
 // 该样式自带黄色双下划线（decorationColor 0xFFFFFF00 + double 样式），
@@ -16,11 +16,11 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.text('樱 读'), findsOneWidget);
+    expect(find.text('嘤 阅'), findsOneWidget);
     expect(find.text('在樱花树下，慢慢读完一本书'), findsOneWidget);
 
     expect(
-      find.ancestor(of: find.text('樱 读'), matching: find.byType(Material)),
+      find.ancestor(of: find.text('嘤 阅'), matching: find.byType(Material)),
       findsWidgets,
       reason: '开屏标题必须位于 Material 内，否则会出现黄色双下划线',
     );
