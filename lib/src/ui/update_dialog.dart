@@ -317,7 +317,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       ),
       const SizedBox(height: 2),
       Text(
-        '多线程分块 · 线路慢了会自动换',
+        '多线程分块 · 线路下不动会自动换',
         style: TextStyle(
           fontSize: 10.5,
           color: scheme.onSurfaceVariant.withValues(alpha: .8),

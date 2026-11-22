@@ -383,7 +383,7 @@ class _SplashText extends StatelessWidget {
               child: Transform.translate(
                 offset: Offset(0, 12 * (1 - titleIn)),
                 child: Text(
-                  '樱 读',
+                  '嘤 阅',
                   style: TextStyle(
                     fontFamily: 'LXGWWenKai',
                     fontSize: 30,

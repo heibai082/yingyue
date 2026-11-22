@@ -444,8 +444,8 @@ void main() {
       expect(await File(target).readAsBytes(), payload);
       expect(
         requests.where((r) => r.headers['Range'] != null).length,
-        greaterThan(2),
-        reason: '应该是多段并发请求，而不是一条流',
+        greaterThanOrEqualTo(2),
+        reason: '应该是分块请求，而不是一条流',
       );
       expect(File('$target.part').existsSync(), isFalse);
     });

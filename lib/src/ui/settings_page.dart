@@ -1569,8 +1569,23 @@ class _SettingsPageState extends State<SettingsPage> {
                 _aboutRow(context, '许可证', AppInfo.license),
                 _aboutRow(
                   context,
-                  '项目主页',
-                  'github.com/akira399/sakura-read',
+                  '原项目（致谢）',
+                  'akira399/sakura-read',
+                  onTap: () async {
+                    final ok = await launchUrlString(AppInfo.upstream);
+                    if (!context.mounted || ok) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('没有找到可用的浏览器'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+                _aboutRow(
+                  context,
+                  '本项目',
+                  'github.com/heibai082/yingyue',
                   onTap: () async {
                     final ok = await launchUrlString(AppInfo.repo);
                     if (!context.mounted || ok) return;
@@ -1582,10 +1597,23 @@ class _SettingsPageState extends State<SettingsPage> {
                     );
                   },
                 ),
+                _aboutRow(context, '用途', '个人自用，不对外分发'),
               ],
             ),
           ),
           const SizedBox(height: 10),
+          Text(
+            '致谢：嘤阅基于 ${AppInfo.upstreamAuthor} 的 sakura-read（MIT）修改而来，'
+            '感谢原作者把项目开源。\n'
+            '${AppInfo.buildNotice}。',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 10.5,
+              height: 1.7,
+              color: scheme.onSurfaceVariant.withValues(alpha: .85),
+            ),
+          ),
+          const SizedBox(height: 6),
           Text(
             '声明：本软件是阅读工具，不提供、不分发任何书籍内容；\n'
             '通过书源获取的正文来自第三方网站，版权归原作者所有。',
@@ -1603,7 +1631,7 @@ class _SettingsPageState extends State<SettingsPage> {
               Icon(Icons.favorite_rounded, size: 14, color: scheme.primary),
               const SizedBox(width: 6),
               Text(
-                '用 Flutter 构建 · Made by ${AppInfo.author}',
+                '用 Flutter 构建 · 基于 sakura-read 修改',
                 style: TextStyle(
                   fontSize: 11.5,
                   color: scheme.onSurfaceVariant,

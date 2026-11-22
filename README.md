@@ -3,6 +3,17 @@
 > Android 小说阅读器，基于 [akira399/sakura-read](https://github.com/akira399/sakura-read)（樱读）改造。
 > 原项目 MIT 协议，本仓库保留原始版权与许可证。
 
+> **仅限自用，不打算外传**：这是给自己手机装的个人构建，不对外分发、不提供支持、
+> 也不上任何应用商店。想用请去原作者仓库取原版：
+> [akira399/sakura-read](https://github.com/akira399/sakura-read)。
+
+## 致谢
+
+- **原作者 [@akira399](https://github.com/akira399)**：嘤阅的全部基础（阅读引擎、书源、TXT/EPUB 解析、
+  排版与主题、桌宠等）都来自他的 [sakura-read](https://github.com/akira399/sakura-read)，MIT 开源。
+  这里只是在他的成果上做了些自用向的小改动——先有原项目，才有这个仓库。
+- 以及 sakura-read 依赖的 Flutter / Dart 生态与各开源组件的作者们。
+
 ## 这是什么
 
 一个给自己用的阅读器：本地 TXT / EPUB 能看，也能用「阅读 3.0」书源联网找书，带桌宠和 AI 助手。
@@ -34,15 +45,21 @@
 
 ## 版本策略
 
-- 正式版之前一律 `0.x`（当前 `0.01`）
+- 正式版之前一律 `0.x`（当前 `0.08`）
 - 稳定后才发 `1.0.0`
+
+## 更新下载
+
+App 内「检查更新」走 GitHub Release，安装包优先从自己的 NAS 镜像取；
+0.08 起改成**多线程分块**（16 连接）下载：NAS 单连接只有 ~250 KB/s，分块后实测 ~5 MB/s，
+60 MB 的包 10 秒左右下完。镜像不支持 Range 时自动退回单流，线路失败自动换下一条。
 
 ## 构建
 
 ```bash
 flutter pub get
 flutter build apk --release --target-platform android-arm64 \
-  --build-name=0.01 --build-number=1
+  --build-name=0.08 --build-number=8
 ```
 
 国内网络建议先设镜像：
@@ -55,3 +72,4 @@ export PUB_HOSTED_URL=https://pub.flutter-io.cn
 ## 许可
 
 MIT License，见 [LICENSE](LICENSE)。原始版权归 akira399 所有。
+本仓库的改动同样以 MIT 发布；再次声明：这是**个人自用**构建，不对外分发。

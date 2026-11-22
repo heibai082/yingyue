@@ -107,7 +107,7 @@ class DownloadSource {
 class UpdateService {
   UpdateService({
     http.Client? client,
-    this.connections = 8,
+    this.connections = 16,
     this.segmentThresholdBytes = 4 * 1024 * 1024,
   }) : _client = client ?? http.Client();
 
@@ -124,10 +124,6 @@ class UpdateService {
 
   /// 单端点超时。
   static const Duration _checkTimeout = Duration(seconds: 10);
-
-  /// 测速时每条线路最多采样的字节数 / 最长耗时。
-  static const int _probeSpan = 128 * 1024;
-  static const Duration _probeWindow = Duration(milliseconds: 2500);
 
   /// 检查端点（按顺序回退；由 [AppInfo.repo] 派生，仓库地址只维护一处）。
   static List<String> get checkEndpoints {
@@ -212,7 +208,9 @@ class UpdateService {
 
   /// 下载 APK 到 [targetPath]。
   ///
-  /// - 线路按 [sourcesFor] 生成；大包先并发测速，按实测速度排序后再下；
+  /// - 线路按 [sourcesFor] 固定优先级：**自己的 NAS 优先**，再国内镜像、直连；
+  ///   不做「测速排序」——单连接测速会误判（NAS 单连接被限速，多连接反而最快），
+  ///   而且会白烧几百 KB 流量。谁能下就用谁，下不动再换下一条。
   /// - 每条线路内部先试多线程分块，服务器不支持 Range 时退回单流；
   /// - 任一线路「全程成功 + 大小校验通过」即返回 true，否则换下一条；
   /// - [onProgress]：`(已下载字节, 总字节)`（总字节未知时为 0）；
@@ -232,13 +230,7 @@ class UpdateService {
     final expected = info.sizeBytes;
     final useParts = expected >= segmentThresholdBytes;
 
-    // 多线路时先测速：NAS 单连接受出口带宽限制，镜像有时反而更快
-    var ordered = sources;
-    if (useParts && sources.length > 1) {
-      ordered = await _rankBySpeed(sources, isCancelled);
-    }
-
-    for (final source in ordered) {
+    for (final source in sources) {
       if (isCancelled?.call() == true) return false;
       onSource?.call(source.label);
       try {
@@ -262,67 +254,17 @@ class UpdateService {
         if (ok) return true;
       } on _Cancelled {
         return false;
-      } catch (_) {
+      } catch (e) {
         // 本线路失败：继续下一条
+        assert(() {
+          // ignore: avoid_print
+          print('[update] 线路 ${source.label} 失败: $e');
+          return true;
+        }());
         if (isCancelled?.call() == true) return false;
       }
     }
     return false;
-  }
-
-  /// 并发测速后按「快 → 慢」排序；测不出速度的线路排在最后（仍会尝试）。
-  Future<List<DownloadSource>> _rankBySpeed(
-    List<DownloadSource> sources,
-    bool Function()? isCancelled,
-  ) async {
-    final speeds = await Future.wait(
-      sources.map((source) async {
-        if (isCancelled?.call() == true) return 0;
-        try {
-          return await _probeSpeed(source.url);
-        } catch (_) {
-          return 0;
-        }
-      }),
-    );
-    final order = List<int>.generate(sources.length, (i) => i);
-    order.sort((a, b) {
-      final bySpeed = speeds[b].compareTo(speeds[a]);
-      return bySpeed != 0 ? bySpeed : a.compareTo(b);
-    });
-    return [for (final i in order) sources[i]];
-  }
-
-  /// 拉一小段数据估个速度（字节/秒）；0 表示这条线路不通。
-  Future<int> _probeSpeed(String url) async {
-    final watch = Stopwatch()..start();
-    final head = await _openRange(url, 0, _probeSpan - 1);
-    if (head.statusCode != 200 && head.statusCode != 206) {
-      await _abandon(head);
-      return 0;
-    }
-    var bytes = 0;
-    final done = Completer<void>();
-    void finish() {
-      if (!done.isCompleted) done.complete();
-    }
-
-    final sub = head.stream.listen(
-      (chunk) {
-        bytes += chunk.length;
-        if (bytes >= _probeSpan) finish();
-      },
-      onDone: finish,
-      onError: (Object _) => finish(),
-      cancelOnError: true,
-    );
-    final timer = Timer(_probeWindow, finish);
-    await done.future;
-    timer.cancel();
-    await sub.cancel();
-    if (bytes <= 0) return 0;
-    final ms = watch.elapsedMilliseconds;
-    return (bytes * 1000) ~/ (ms <= 0 ? 1 : ms);
   }
 
   /// 单流下载：先写 `.part` 临时文件，完成后做大小校验并改名。
@@ -375,7 +317,10 @@ class UpdateService {
     return true;
   }
 
-  /// 多线程分块下载（HTTP Range + 预分配文件）。
+  /// 多线程分块下载（HTTP Range + 预分配文件 + 分块队列）。
+  ///
+  /// 分块数比连接数多几倍（每块 0.5–3 MB），谁先下完谁去领下一块，
+  /// 免得「一条慢连接拖住整个包的尾巴」。
   ///
   /// 返回 false = 这条线路不支持 Range，交给 [_downloadSingle] 单流下。
   Future<bool> _downloadSegmented(
@@ -385,7 +330,8 @@ class UpdateService {
     void Function(int received, int total)? onProgress,
     bool Function()? isCancelled,
   ) async {
-    final head = await _openRange(source.url, 0, _probeSpan - 1);
+    // 只要 1 个字节就能从 Content-Range 里拿到总大小
+    final head = await _openRange(source.url, 0, 0);
     final total = head.totalBytes > 0 ? head.totalBytes : expectedBytes;
     final rangeOk = head.statusCode == 206 && total > 0;
     await _abandon(head);
@@ -394,37 +340,44 @@ class UpdateService {
       throw const FileSystemException('安装包大小不一致');
     }
 
+    final chunks = _planChunks(total);
     final tmp = File('$targetPath.part');
     await tmp.parent.create(recursive: true);
     final file = await tmp.open(mode: FileMode.write);
     var closed = false;
     var aborted = false;
+    var next = 0;
     final lock = _WriteLock();
-    final progress = _PartProgress(onProgress, total, connections);
+    final progress = _PartProgress(onProgress, total, chunks.length);
     try {
-      // 预分配：先把文件撑到最终大小，后面各线程按偏移写
+      // 预分配：先把文件撑到最终大小，后面各连接按偏移写
       await file.truncate(total);
-      final partSize = (total + connections - 1) ~/ connections;
-      final tasks = <Future<void>>[];
-      for (var i = 0; i < connections; i++) {
-        final start = i * partSize;
-        if (start >= total) break;
-        final end = math.min(total, start + partSize) - 1;
-        tasks.add(
-          _fetchPart(
-            index: i,
-            url: source.url,
-            start: start,
-            end: end,
-            file: file,
-            lock: lock,
-            progress: progress,
-            isCancelled: isCancelled,
-            isAborted: () => aborted,
-          ),
-        );
+
+      Future<void> worker() async {
+        while (true) {
+          if (aborted || isCancelled?.call() == true) throw const _Cancelled();
+          final index = next++;
+          if (index >= chunks.length) return;
+          try {
+            await _fetchPart(
+              index: index,
+              url: source.url,
+              start: chunks[index].start,
+              end: chunks[index].end,
+              file: file,
+              lock: lock,
+              progress: progress,
+              isCancelled: isCancelled,
+              isAborted: () => aborted,
+            );
+          } catch (e) {
+            aborted = true; // 一个分块彻底失败：让其它连接尽快收手
+            rethrow;
+          }
+        }
       }
-      await Future.wait(tasks);
+
+      await Future.wait(List.generate(connections, (_) => worker()));
       await file.close();
       closed = true;
       progress.flush();
@@ -444,6 +397,19 @@ class UpdateService {
       await _quietDelete(tmp);
       rethrow;
     }
+  }
+
+  /// 切块：块数约为连接数的 2 倍，单块限制在 0.25–3 MB。
+  List<_Chunk> _planChunks(int total) {
+    final size = math.min(
+      3 * 1024 * 1024,
+      math.max(256 * 1024, (total / (connections * 2)).ceil()),
+    );
+    final chunks = <_Chunk>[];
+    for (var start = 0; start < total; start += size) {
+      chunks.add(_Chunk(start, math.min(total, start + size) - 1));
+    }
+    return chunks;
   }
 
   /// 拉一个分段并写进文件对应偏移；失败重试一次。
@@ -548,6 +514,16 @@ class _RangeHead {
   final int totalBytes;
 
   final Stream<List<int>> stream;
+}
+
+/// 一个待下载的分块（闭区间）。
+class _Chunk {
+  const _Chunk(this.start, this.end);
+
+  final int start;
+  final int end;
+
+  int get length => end - start + 1;
 }
 
 /// 用户取消下载。
