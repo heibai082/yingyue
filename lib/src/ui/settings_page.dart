@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 
@@ -907,9 +907,16 @@ class _SettingsPageState extends State<SettingsPage> {
                     '同步源仓库（只拉新）',
                     style: TextStyle(fontSize: 14),
                   ),
-                  subtitle: const Text(
-                    '下载源仓库 24 小时内的新合集并并入书源，不体检；后台跑，不挡操作',
-                    style: TextStyle(fontSize: 12),
+                  subtitle: AnimatedBuilder(
+                    animation: widget.sourceStore,
+                    builder: (_, _) {
+                      final deleted = widget.sourceStore.deletedTodayCount;
+                      return Text(
+                        '下载源仓库 24 小时内的新合集并并入书源，不体检；后台跑，不挡操作'
+                        '${deleted > 0 ? '\n今天删过 $deleted 个，同步时不会再加回来' : ''}',
+                        style: const TextStyle(fontSize: 12),
+                      );
+                    },
                   ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,

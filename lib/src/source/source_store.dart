@@ -20,12 +20,17 @@ class SourceImportReport {
     this.added = 0,
     this.updated = 0,
     this.invalid = 0,
+    this.blocked = 0,
     this.error,
   });
 
   final int added;
   final int updated;
   final int invalid;
+
+  /// 今天刚被删掉过、所以没有再加回来的条目数。
+  final int blocked;
+
   final String? error;
 
   bool get hasAny => added + updated > 0;
@@ -36,6 +41,7 @@ class SourceImportReport {
       if (added > 0) '新增 $added 个',
       if (updated > 0) '更新 $updated 个',
       if (invalid > 0) '跳过 $invalid 个无效条目',
+      if (blocked > 0) '跳过 $blocked 个今天删过的',
     ];
     return parts.isEmpty ? '没有可导入的书源' : parts.join('，');
   }
@@ -43,7 +49,11 @@ class SourceImportReport {
 
 /// 书源仓库（可监听，UI 依赖它刷新）。
 class SourceStore extends ChangeNotifier with ReliablePersistence {
-  SourceStore({this._dirsOverride, List<BookSource>? initial}) {
+  SourceStore({
+    this._dirsOverride,
+    List<BookSource>? initial,
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now {
     if (initial != null) _sources.addAll(initial);
   }
 
@@ -52,6 +62,16 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
 
   final AppDirs? _dirsOverride;
   final List<BookSource> _sources = [];
+
+  /// 「今天删过」的书源：url -> 删除时间（毫秒）。
+  ///
+  /// 为什么要记：书源体检一天能删掉上百个死源，紧接着点「同步源仓库」时，
+  /// 合集里那些刚被删掉的源又会被原样加回来，等于白删。
+  final Map<String, int> _deletedAt = {};
+
+  /// 可注入的时钟（测试用；正常运行就是 DateTime.now）。
+  final DateTime Function() _clock;
+
   AppDirs? _dirs;
   File? _file;
   Timer? _saveTimer;
@@ -61,6 +81,21 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
   int get enabledCount => _sources.where((s) => s.enabled).length;
 
   bool get isEmpty => _sources.isEmpty;
+
+  /// 今天删掉的书源数量（给界面提示用）。
+  int get deletedTodayCount {
+    final now = _clock();
+    return _deletedAt.keys.where((u) => isDeletedToday(u, now)).length;
+  }
+
+  /// 这个源今天是否被删过（被删过的不会被「同步源仓库」加回来）。
+  bool isDeletedToday(String url, [DateTime? now]) {
+    final at = _deletedAt[url];
+    if (at == null) return false;
+    final then = DateTime.fromMillisecondsSinceEpoch(at);
+    final n = now ?? _clock();
+    return then.year == n.year && then.month == n.month && then.day == n.day;
+  }
 
   BookSource? byUrl(String url) {
     for (final s in _sources) {
@@ -90,6 +125,17 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
             }
           }
         }
+        // 「今天删过」的记录：只留最近 7 天，别让文件无限膨胀
+        final deleted = data is Map ? data['deletedAt'] : null;
+        if (deleted is Map) {
+          final cutoff = _clock()
+              .subtract(const Duration(days: 7))
+              .millisecondsSinceEpoch;
+          deleted.forEach((k, v) {
+            final at = v is num ? v.toInt() : int.tryParse('$v') ?? 0;
+            if (at > cutoff) _deletedAt['$k'] = at;
+          });
+        }
       }
     } catch (_) {
       // 读取失败时以空列表启动
@@ -106,20 +152,34 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
   }
 
   /// 同 [addAll]，但把「这次真正新增的条目」也返回（给「本次新增了哪些源」用）。
-  ({int added, int updated, List<BookSource> addedSources}) addAllDetailed(
-    List<BookSource> items,
-  ) {
+  ///
+  /// 默认会跳过「今天刚被删掉」的源（[ignoreDeleted] = true 时不跳，撤销删除用）。
+  ({int added, int updated, List<BookSource> addedSources, int blocked})
+  addAllDetailed(List<BookSource> items, {bool ignoreDeleted = false}) {
     var added = 0;
     var updated = 0;
+    var blocked = 0;
     final addedSources = <BookSource>[];
+    final now = _clock();
     for (final s in items) {
+      // 今天刚删掉的（体检清理 / 手动删）不要被「同步源仓库」原样加回来
+      if (!ignoreDeleted && isDeletedToday(s.bookSourceUrl, now)) {
+        blocked++;
+        continue;
+      }
       final i = _sources.indexWhere((x) => x.bookSourceUrl == s.bookSourceUrl);
       if (i >= 0) {
-        // 保留用户当前的启用状态
-        final keepEnabled = _sources[i].enabled;
-        _sources[i] = s.enabled == keepEnabled
-            ? s
-            : s.copyWith(enabled: keepEnabled);
+        // 保留用户当前的启用状态，以及体检出来的健康数据
+        // （合集里来的 JSON 不带 healthFailCount，直接覆盖会把失败计数清零，
+        //  等于「每同步一次死源就又活过来」）
+        final existing = _sources[i];
+        _sources[i] = s.copyWith(
+          enabled: existing.enabled,
+          healthFailCount: existing.healthFailCount,
+          healthCheckedAt: existing.healthCheckedAt,
+          healthError: existing.healthError,
+          clearHealthError: existing.healthError == null,
+        );
         updated++;
       } else {
         _sources.add(s);
@@ -131,13 +191,31 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
       _saveSoon();
       notifyListeners();
     }
-    return (added: added, updated: updated, addedSources: addedSources);
+    return (
+      added: added,
+      updated: updated,
+      addedSources: addedSources,
+      blocked: blocked,
+    );
+  }
+
+  /// 撤销删除：先清掉「今天删过」的记录，再把书源加回来。
+  int restoreSources(List<BookSource> items) {
+    if (items.isEmpty) return 0;
+    for (final s in items) {
+      _deletedAt.remove(s.bookSourceUrl);
+    }
+    final r = addAllDetailed(items, ignoreDeleted: true);
+    _saveSoon();
+    notifyListeners();
+    return r.added + r.updated;
   }
 
   void remove(String url) {
     final before = _sources.length;
     _sources.removeWhere((s) => s.bookSourceUrl == url);
     if (_sources.length != before) {
+      _deletedAt[url] = _clock().millisecondsSinceEpoch;
       _saveSoon();
       notifyListeners();
     }
@@ -176,7 +254,12 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
     final targets = urls.toSet();
     if (targets.isEmpty) return 0;
     final before = _sources.length;
-    _sources.removeWhere((s) => targets.contains(s.bookSourceUrl));
+    final stamp = _clock().millisecondsSinceEpoch;
+    _sources.removeWhere((s) {
+      if (!targets.contains(s.bookSourceUrl)) return false;
+      _deletedAt[s.bookSourceUrl] = stamp;
+      return true;
+    });
     final removed = before - _sources.length;
     if (removed > 0) {
       _saveSoon();
@@ -245,11 +328,12 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
       );
     }
     final total = decoded is List ? decoded.length : 1;
-    final r = addAll(items);
+    final r = addAllDetailed(items);
     return SourceImportReport(
       added: r.added,
       updated: r.updated,
       invalid: total - items.length,
+      blocked: r.blocked,
     );
   }
 
@@ -346,6 +430,8 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
       jsonEncode({
         'version': 1,
         'sources': _sources.map((s) => s.toJson()).toList(),
+        // 只在有记录时写，避免老文件被无意义地改写
+        if (_deletedAt.isNotEmpty) 'deletedAt': _deletedAt,
       }),
     );
   }

@@ -25,6 +25,7 @@ class DailySourceSyncReport {
     this.newCollections = 0,
     this.addedSources = 0,
     this.updatedSources = 0,
+    this.skippedDeleted = 0,
     this.checked = 0,
     this.healthy = 0,
     this.failed = 0,
@@ -39,6 +40,9 @@ class DailySourceSyncReport {
   final int newCollections;
   final int addedSources;
   final int updatedSources;
+
+  /// 今天被删过、这次没有再并入的数量。
+  final int skippedDeleted;
   final int checked;
   final int healthy;
   final int failed;
@@ -55,6 +59,7 @@ class DailySourceSyncReport {
       if (newCollections > 0) '新增合集 $newCollections 个',
       if (addedSources > 0) '并入书源 $addedSources 个',
       if (updatedSources > 0) '更新 $updatedSources 个',
+      if (skippedDeleted > 0) '跳过 $skippedDeleted 个今天删过的',
       if (checked > 0) '体检 $checked 个（正常 $healthy / 失败 $failed）',
       if (removed > 0) '自动删除 $removed 个',
     ];
@@ -152,6 +157,7 @@ class DailySourceSync {
       var collections = 0;
       var added = 0;
       var updated = 0;
+      var blocked = 0;
       final addedItems = <SourceSyncLogItem>[];
       String? hubError;
       if (fetchNew) {
@@ -183,6 +189,7 @@ class DailySourceSync {
               final rep = store.addAllDetailed(BookSource.listFromJson(list));
               added += rep.added;
               updated += rep.updated;
+              blocked += rep.blocked;
               collections++;
               seen[item.id] = stamp;
               for (final s in rep.addedSources) {
@@ -194,7 +201,10 @@ class DailySourceSync {
                   ),
                 );
               }
-              tell('已并入 $added 个新书源（$collections 个合集）');
+              tell(
+                '已并入 $added 个新书源（$collections 个合集）'
+                '${blocked > 0 ? ' · 跳过 $blocked 个今天删过的' : ''}',
+              );
             } catch (_) {
               // 单个合集失败不影响后面的
             }
@@ -259,6 +269,7 @@ class DailySourceSync {
       return DailySourceSyncReport(
         ran: true,
         newCollections: collections,
+        skippedDeleted: blocked,
         addedSources: added,
         updatedSources: updated,
         checked: checked,

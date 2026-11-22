@@ -246,7 +246,8 @@ class SourceHealthController extends ChangeNotifier {
         .toList();
     final n = restore.length;
     removedSources.clear();
-    store.addAll(restore);
+    // 走 restoreSources：顺便清掉「今天删过」的标记，否则撤销了也会被同步跳过
+    store.restoreSources(restore);
     // 列表里对应的条目改回「失败」，别显示成已删
     for (var i = 0; i < entries.length; i++) {
       final e = entries[i];

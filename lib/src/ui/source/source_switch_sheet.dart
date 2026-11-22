@@ -1,4 +1,4 @@
-﻿// 换源面板：为一本在线书（书架 / 阅读中）重新搜索并切换到新的书源。
+// 换源面板：为一本在线书（书架 / 阅读中）重新搜索并切换到新的书源。
 //
 // 流程：自动用当前书名搜索所有启用书源 → 按相关性排序展示候选
 // → 选择后先拉取详情/目录校验，再切换（保留阅读进度，清空旧源章节缓存）。
@@ -134,7 +134,23 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
         }
       }
     }
-    if (mounted) setState(() => _searching = true);
+    if (mounted) {
+      setState(() {
+        _searching = true;
+        _error = null;
+        _candidates = [];
+        _searched = 0;
+        _found = 0;
+        _stopped = false;
+        _total = widget.sourceStore.enabled.length;
+        _startedAt = DateTime.now();
+      });
+    }
+    // 秒表：让「已用 xx s」能走起来（不然界面里永远是 0s）
+    _ticker?.cancel();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _searching) setState(() {});
+    });
     try {
       final enabled = widget.sourceStore.enabled;
       if (enabled.isEmpty) {

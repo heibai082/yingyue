@@ -1,4 +1,4 @@
-﻿// 源仓库抓取 + 每日自动同步的回归测试（不联网，全部用 MockClient / 假检测器）。
+// 源仓库抓取 + 每日自动同步的回归测试（不联网，全部用 MockClient / 假检测器）。
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -90,6 +90,7 @@ void main() {
     });
 
     SourceHubClient clientFor({
+      int id = 1341,
       required String time,
       required List<Map<String, dynamic>> sources,
       List<String>? requests,
@@ -98,7 +99,7 @@ void main() {
         client: MockClient((req) async {
           requests?.add(req.url.toString());
           if (req.url.path.contains('/yuedu/shuyuans/index.html')) {
-            return http.Response.bytes(utf8.encode(_indexHtml(time: time)), 200,
+            return http.Response.bytes(utf8.encode(_indexHtml(time: time, id: id)), 200,
                 headers: {'content-type': 'text/html; charset=utf-8'});
           }
           if (req.url.path.endsWith('.json')) {
@@ -199,6 +200,42 @@ void main() {
       final report = await sync.runIfDue();
       expect(report.newCollections, 1);
       expect(store.sources, hasLength(2));
+    });
+
+    test('体检删掉的源，当天同步不会又被加回来', () async {
+      // 先放一个「体检会删」的源
+      final victim = BookSource(
+        bookSourceUrl: 'https://a.example.com',
+        bookSourceName: 'A 站',
+        healthFailCount: 1,
+        searchUrl: 'https://a.example.com/s?key={{key}}',
+      );
+      store = SourceStore(initial: [victim]);
+      final sync = DailySourceSync(
+        store: store,
+        prefs: prefs,
+        client: clientFor(time: '1小时前', sources: _twoSources()),
+        checker: (s, k) async => const SourceCheckOutcome(ok: false, error: '超时'),
+      );
+
+      // 第一轮：体检把 A 站删掉（连续失败 2 次）
+      final first = await sync.runIfDue();
+      expect(first.removed, 1);
+      expect(store.byUrl(victim.bookSourceUrl), isNull);
+
+      // 紧接着同步源仓库：另一个合集里又有 A 站，当天不该加回来
+      prefs.setSourceSyncDay('');
+      final second = DailySourceSync(
+        store: store,
+        prefs: prefs,
+        client: clientFor(id: 1342, time: '1小时前', sources: _twoSources()),
+        checker: (s, k) async => const SourceCheckOutcome(ok: true),
+      ).runIfDue(force: true, healthCheck: false);
+      final report = await second;
+      expect(report.skippedDeleted, greaterThanOrEqualTo(1));
+      expect(store.byUrl(victim.bookSourceUrl), isNull, reason: '今天删过的不该回来');
+      // B 站（没删过）可以正常加
+      expect(store.byUrl('https://b.example.com'), isNotNull);
     });
 
     test('关掉开关后 isDue 为 false', () {
