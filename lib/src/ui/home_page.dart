@@ -1,0 +1,436 @@
+import 'dart:async';
+
+import '../source/subscription_link.dart';
+import '../source/http_client.dart';
+
+import 'dart:io' show Platform;
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../data/book_store.dart';
+import '../data/pet_guide.dart';
+import '../data/pet_store.dart';
+import '../data/prefs.dart';
+import '../data/stats_store.dart';
+import '../platform/native_bridge.dart';
+import '../platform/open_file_service.dart';
+import '../platform/update_service.dart';
+import '../source/source_store.dart';
+import 'reader/reader_page.dart';
+import 'recent_page.dart';
+import 'settings_page.dart';
+import 'shelf_page.dart';
+import 'source/discover_page.dart';
+import 'storage_permission_page.dart';
+import 'update_dialog.dart';
+import 'widgets/pet_guide_overlay.dart';
+import 'widgets/pet_overlay.dart' show kPetEggActive;
+
+class HomePage extends StatefulWidget {
+  const HomePage({
+    super.key,
+    required this.store,
+    required this.prefs,
+    required this.sourceStore,
+    required this.statsStore,
+  });
+
+  final BookStore store;
+  final AppPrefs prefs;
+  final SourceStore sourceStore;
+  final StatsStore statsStore;
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  int _index = 0;
+  bool? _granted;
+
+  /// 启动后自动检查更新的延迟任务（见 [_scheduleAutoUpdateCheck]）。
+  Timer? _updateCheckTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // 「重看新手引导」：切回书架页（引导从书架开始，后续锚点也在书架 / 导航栏）
+    kPetGuideReplay.addListener(_onGuideReplay);
+    kPetGuideStepId.addListener(_onGuideStepChanged);
+    // 「用嘤阅打开文件」：接住系统文件打开事件（冷启动取一次 + 热启动持续监听）
+    OpenFileService.instance
+      ..onOpenFile = _handleOpenedFile
+      ..listen();
+    unawaited(_consumeLaunchFile());
+    _scheduleAutoUpdateCheck();
+    _check();
+  }
+
+  // ==================== 启动自动检查更新 ====================
+
+  /// 启动后延迟几秒做一次静默更新检查。
+  ///
+  /// - 延迟的目的：避开开屏动画与首屏加载，不跟启动流程抢资源；
+  /// - 失败静默：网络不好时不打扰用户（设置页可手动检查）；
+  /// - 引导 / 彩蛋进行中不弹（避免打断首启流程与彩蛋体验）。
+  void _scheduleAutoUpdateCheck() {
+    // 测试环境：不发网络请求、不留 Timer（flutter test 的模拟时钟会有
+    // 「pending timer」断言，且测试要完全离线可复现）。
+    if (Platform.environment['FLUTTER_TEST'] == 'true') return;
+    _updateCheckTimer = Timer(const Duration(seconds: 3), () {
+      unawaited(_autoCheckUpdate());
+    });
+  }
+
+  Future<void> _autoCheckUpdate() async {
+    if (!mounted) return;
+    final prefs = widget.prefs;
+    if (!prefs.autoCheckUpdate) return;
+    // 还没同意条款（首启流程中）→ 不打扰；下次启动再查
+    if (!prefs.agreementAccepted) return;
+    // 新手引导 / 彩蛋进行中 → 不打断
+    if (kPetGuideActive.value || kPetEggActive.value) return;
+
+    final result = await UpdateService.instance.check();
+    if (!mounted) return;
+    if (result.status != UpdateCheckStatus.updateAvailable) return;
+    final info = result.info!;
+    // 用户对该版本点过「以后再说」→ 不再自动弹（设置页手动检查仍可见）
+    if (prefs.skipUpdateVersion == info.version) return;
+    // 检查期间状态可能又变了（开始引导等）
+    if (kPetGuideActive.value || kPetEggActive.value) return;
+
+    await showUpdateDialog(context, info: info, isAuto: true, prefs: prefs);
+  }
+
+  /// 冷启动：系统带文件启动时，取走路径并处理。
+  Future<void> _consumeLaunchFile() async {
+    final path = await OpenFileService.instance.consumeLaunchFile();
+    if (path == null || !mounted) return;
+    // 等首帧后再处理（书架页 / SnackBar 需要已挂载）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _handleOpenedFile(path);
+    });
+  }
+
+  /// 分派被打开的文件：txt / epub → 导入书架并打开；json → 导入书源。
+  Future<void> _handleOpenedFile(String path) async {
+    if (!mounted) return;
+    if (path.startsWith('legado:')) {
+      try {
+        final url = subscriptionUrl(path);
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('导入书源订阅'),
+            content: Text('是否获取并导入以下订阅？\n$url'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('导入'),
+              ),
+            ],
+          ),
+        );
+        if (ok != true) return;
+        final client = SourceHttpClient();
+        try {
+          final response = await client.get(url, retries: 0);
+          if (!response.ok) throw StateError('请求失败');
+          final report = widget.sourceStore.importFromText(response.body);
+          await widget.sourceStore.flush();
+          if (mounted) {
+            ScaffoldMessenger.of(context)
+                .showSnackBar(SnackBar(content: Text(report.summary)));
+          }
+        } finally {
+          client.close();
+        }
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('订阅导入失败，请检查地址与网络')));
+        }
+      }
+      return;
+    }
+    final ext = path.contains('.')
+        ? path.substring(path.lastIndexOf('.') + 1).toLowerCase()
+        : '';
+    final messenger = ScaffoldMessenger.of(context);
+
+    if (ext == 'json') {
+      // 书源文件
+      messenger.showSnackBar(const SnackBar(content: Text('正在导入书源…')));
+      final report = await widget.sourceStore.importFromFile(path);
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(report.summary)));
+      setState(() => _index = 0); // 导入书源后停留书架无意义，回书架
+      return;
+    }
+
+    if (ext == 'txt' || ext == 'epub') {
+      // 已在书架：直接打开阅读器
+      final existing = widget.store.books.where((b) => b.path == path).toList();
+      if (existing.isNotEmpty && mounted) {
+        setState(() => _index = 0);
+        _openBook(existing.first.id);
+        return;
+      }
+      messenger.showSnackBar(const SnackBar(content: Text('正在导入…')));
+      final result = await widget.store.importFile(path);
+      if (!mounted) return;
+      if (!result.success) {
+        messenger.showSnackBar(SnackBar(content: Text(result.error ?? '导入失败')));
+        return;
+      }
+      setState(() => _index = 0);
+      _openBook(result.book!.id);
+      return;
+    }
+
+    messenger.showSnackBar(SnackBar(content: Text('不支持的文件类型：.$ext')));
+  }
+
+  /// 打开指定书籍的阅读器（从书架数据取进度）。
+  void _openBook(String bookId) {
+    final book = widget.store.byId(bookId);
+    if (book == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ReaderPage(
+          store: widget.store,
+          prefs: widget.prefs,
+          bookId: book.id,
+          chapterIndex: book.safeChapterIndex,
+          charOffset: book.charOffset,
+        ),
+      ),
+    );
+  }
+
+  /// 收到「重看新手引导」请求：把底部导航切回书架（第 1 格）。
+  void _onGuideReplay() {
+    if (mounted && _index != 0) setState(() => _index = 0);
+  }
+
+  Future<void> _check() async {
+    final granted = await NativeBridge.hasStoragePermission();
+    if (mounted) {
+      setState(() => _granted = granted);
+      // 权限就绪状态通知桌宠宿主（桌宠 = 开屏结束 + 权限就绪 才显示）
+      petMarkHomeReady(granted);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _check();
+  }
+
+  @override
+  void dispose() {
+    kPetGuideReplay.removeListener(_onGuideReplay);
+    kPetGuideStepId.removeListener(_onGuideStepChanged);
+    _updateCheckTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// 引导走到「发现 / 最近 / 设置」时，底栏跟着切过去。
+  ///
+  /// 引导遮罩参与手势竞争：用户点底栏时引导虽然推进了，底栏自己的点击
+  /// 偶尔会被竞技场取消，于是「点一下『发现』」看起来没反应。让引导驱动
+  /// 切页后，高亮的页面与实际页面永远是同一个。
+  void _onGuideStepChanged() {
+    const tabs = {'shelf': 0, 'discover': 1, 'recent': 2, 'settings': 3};
+    final target = tabs[kPetGuideStepId.value];
+    if (target == null) return;
+
+    void apply() {
+      if (!mounted) return;
+      // 步骤可能已经被推进/跳过，别把用户又拽回旧页面。
+      if (tabs[kPetGuideStepId.value] != target) return;
+      if (_index != target) setState(() => _index = target);
+    }
+
+    apply();
+    // 同一次点击里底栏自己也会处理 onSelect（引导推进 + 底栏点击会竞争），
+    // 它可能在本方法之后才写回旧下标，所以这一帧结束后再对一次。
+    WidgetsBinding.instance.addPostFrameCallback((_) => apply());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final granted = _granted;
+    if (granted == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (!granted) {
+      return StoragePermissionPage(onRecheck: _check);
+    }
+    return Scaffold(
+      // 底栏要「毛玻璃」观感：正文滚动到栏底下时能被模糊透出来，
+      // 所以主体延伸到栏后面（用户反馈：底栏玻璃没效果、全是透明）。
+      extendBody: true,
+      body: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: Theme.of(context).brightness == Brightness.dark
+            ? SystemUiOverlayStyle.light
+            : SystemUiOverlayStyle.dark,
+        child: IndexedStack(
+          index: _index,
+          children: [
+            ShelfPage(
+              store: widget.store,
+              prefs: widget.prefs,
+              sourceStore: widget.sourceStore,
+              statsStore: widget.statsStore,
+            ),
+            // 发现页（原在书架右上角，改到常驻底栏，用户要求）
+            DiscoverPage(
+              bookStore: widget.store,
+              prefs: widget.prefs,
+              sourceStore: widget.sourceStore,
+            ),
+            RecentPage(
+              store: widget.store,
+              prefs: widget.prefs,
+              statsStore: widget.statsStore,
+            ),
+            SettingsPage(
+              store: widget.store,
+              prefs: widget.prefs,
+              sourceStore: widget.sourceStore,
+              statsStore: widget.statsStore,
+            ),
+          ],
+        ),
+      ),
+      bottomNavigationBar: _GuidedNavBar(
+        index: _index,
+        onSelect: (i) => setState(() => _index = i),
+      ),
+    );
+  }
+}
+
+/// 底部导航 + 每格独立的引导锚点（书架 / 发现 / 最近 / 设置）。
+///
+/// 四格都在**常驻导航栏**上，因此引导要求用户点击时不会导致页面结构失效——
+/// 这是引导设计的硬约束（指向会跳页的按钮会让后续步骤锚点消失）。
+class _GuidedNavBar extends StatelessWidget {
+  const _GuidedNavBar({required this.index, required this.onSelect});
+
+  final int index;
+  final ValueChanged<int> onSelect;
+
+  /// 格数（与 [NavigationBar.destinations] 数量保持一致）。
+  static const int _slots = 4;
+
+  /// 把整条栏按等分切成 [_slots] 格。
+  Rect Function(Size) _cell(int slot) =>
+      (size) => Rect.fromLTWH(
+        size.width * slot / _slots,
+        0,
+        size.width / _slots,
+        size.height,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return PetGuideTarget(
+      id: 'nav_shelf',
+      rectOf: _cell(0),
+      child: PetGuideTarget(
+        id: 'nav_discover',
+        rectOf: _cell(1),
+        child: PetGuideTarget(
+          id: 'nav_recent',
+          rectOf: _cell(2),
+          child: PetGuideTarget(
+            id: 'nav_settings',
+            rectOf: _cell(3),
+            child: _GlassBar(
+              child: NavigationBar(
+                selectedIndex: index,
+                onDestinationSelected: onSelect,
+                // 让 NavigationBar 自身透明，透出下面的模糊层，
+                // 否则它的实色背景会把毛玻璃整块盖住（正是用户反馈的现象）。
+                backgroundColor: Colors.transparent,
+                surfaceTintColor: Colors.transparent,
+                elevation: 0,
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.auto_stories_outlined),
+                    selectedIcon: Icon(Icons.auto_stories),
+                    label: '书架',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.explore_outlined),
+                    selectedIcon: Icon(Icons.explore),
+                    label: '发现',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.history_outlined),
+                    selectedIcon: Icon(Icons.history),
+                    label: '最近',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.favorite_outline_rounded),
+                    selectedIcon: Icon(Icons.favorite_rounded),
+                    label: '设置',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 底栏毛玻璃：真实模糊底下的内容 + 半透明着色 + 顶部高光描边。
+///
+/// 用户反馈「底栏什么玻璃没效果啊都是透明」：原先底栏背景是不透明纯色
+/// （主题里 `navigationBarTheme.backgroundColor`），既没有模糊也看不出玻璃质感。
+/// 这里用 [ImageFiltered] 做真实高斯模糊，再叠一层半透明主题色与细描边，
+/// 配合 [Scaffold.extendBody] 就能看到正文从底栏下面透出来的玻璃效果。
+class _GlassBar extends StatelessWidget {
+  const _GlassBar({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final tint = isDark ? const Color(0xFF1D1626) : Colors.white;
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            // 透明度留一点，避免完全遮住底下滚动的内容（玻璃质感的关键）
+            color: tint.withValues(alpha: isDark ? .72 : .78),
+            border: Border(
+              top: BorderSide(
+                color: (isDark ? Colors.white : Colors.black).withValues(
+                  alpha: .07,
+                ),
+              ),
+            ),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}

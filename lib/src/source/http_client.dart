@@ -1,0 +1,404 @@
+// 请求层：超时 / 重试 / 编码探测（UTF-8 与 GBK）/ 请求头 / Cookie / 简单限流。
+//
+// 设计目标（对照 Legado 的公开行为，独立实现）：
+// - 书源站点编码混杂（UTF-8 / GBK），需要按 响应头 → 页面 meta → 兜底探测 的顺序解码；
+// - 每源可配置并发率（concurrentRate：`N/M` 表示 M 秒最多 N 次请求）；
+// - Cookie 暂存于内存（enabledCookieJar 的基础形态，后续里程碑再持久化）。
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:fast_gbk/fast_gbk.dart';
+import 'package:http/http.dart' as http;
+
+/// 一次请求的响应。
+class SourceResponse {
+  SourceResponse({
+    required this.statusCode,
+    required this.body,
+    required this.bytes,
+    required this.headers,
+    required this.finalUrl,
+  });
+
+  final int statusCode;
+
+  /// 按检测到的编码解码后的正文。
+  final String body;
+
+  /// 原始字节（保存封面等二进制场景备用）。
+  final Uint8List bytes;
+
+  final Map<String, String> headers;
+
+  /// 重定向后的最终地址。
+  final String finalUrl;
+
+  bool get ok => statusCode >= 200 && statusCode < 300;
+}
+
+/// 请求失败（网络层）。
+class SourceHttpException implements Exception {
+  SourceHttpException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// 轻量请求客户端。
+class SourceHttpClient {
+  SourceHttpClient({http.Client? client, Duration? timeout})
+    : _client = client ?? http.Client(),
+      _ownsClient = client == null,
+      defaultTimeout = timeout ?? const Duration(seconds: 15);
+
+  http.Client _client;
+
+  /// 只有自己创建的 client 才能在连接异常后安全重建。
+  final bool _ownsClient;
+  final Duration defaultTimeout;
+  final _CookieJar _cookies = _CookieJar();
+
+  /// 丢掉缓冲在连接池里的坏连接。
+  ///
+  /// 用户反馈的「请求失败：Connection closed before full header was received」
+  /// 就是 keep-alive 连接被对端提前关掉后继续复用的结果：重试时如果还拿着
+  /// 同一个 client，会一直撞在同一条死连接上，所以必须换一个。
+  void _resetConnectionPool() {
+    if (!_ownsClient) return;
+    try {
+      _client.close();
+    } catch (_) {
+      // 关闭失败不影响后续重试
+    }
+    _client = http.Client();
+  }
+
+  /// GET。
+  Future<SourceResponse> get(
+    String url, {
+    Map<String, String>? headers,
+    String? charset,
+    Duration? timeout,
+    int retries = 2,
+  }) => request(
+    'GET',
+    url,
+    headers: headers,
+    charset: charset,
+    timeout: timeout,
+    retries: retries,
+  );
+
+  /// POST（body 为原始字符串，通常已在模板层渲染好）。
+  Future<SourceResponse> post(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? charset,
+    Duration? timeout,
+    int retries = 2,
+  }) => request(
+    'POST',
+    url,
+    headers: headers,
+    body: body,
+    charset: charset,
+    timeout: timeout,
+    retries: retries,
+  );
+
+  /// 通用请求（带重试、Cookie 与手动重定向）。
+  ///
+  /// 为什么手动处理 3xx：书站换域名时普遍返回 `301` + `Location`，而
+  /// `package:http`/`dart:io` 在跟随 301/302 时会把 POST **改写成 GET**
+  /// （浏览器语义）。对「搜索接口只接受 POST」的站点（如得奇 `deqixs.cc`
+  /// → `deqixss.com`）这等于丢掉请求体，结果是空页面 / 0 本书。
+  /// 这里对 301/302/307/308 保留原始方法 + 请求体重发，只有 303 才降级 GET。
+  Future<SourceResponse> request(
+    String method,
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? charset,
+    Duration? timeout,
+    int retries = 2,
+  }) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !_isHttpUri(uri)) {
+      throw SourceHttpException('无效的地址：$url');
+    }
+    var attempt = 0;
+    while (true) {
+      attempt++;
+      try {
+        final h = <String, String>{
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Mobile Safari/537.36',
+          ...?headers,
+        };
+        var currentUri = uri;
+        var currentMethod = method;
+        var currentBody = body;
+        var redirects = 0;
+        final t = timeout ?? defaultTimeout;
+        while (true) {
+          final hh = Map<String, String>.from(h);
+          final cookie = _cookies.headerFor(currentUri);
+          if (cookie != null) hh['Cookie'] = cookie;
+          final req = http.Request(currentMethod, currentUri);
+          req.followRedirects = false;
+          req.maxRedirects = 0;
+          hh.forEach((k, v) => req.headers[k] = v);
+          if (currentBody != null) req.bodyBytes = utf8.encode(currentBody);
+          final streamed = await _client.send(req).timeout(t);
+          var resp = await http.Response.fromStream(streamed).timeout(t);
+          _cookies.absorb(currentUri, resp.headers);
+
+          final loc = resp.headers['location'];
+          final isRedirect =
+              resp.statusCode == 301 ||
+              resp.statusCode == 302 ||
+              resp.statusCode == 303 ||
+              resp.statusCode == 307 ||
+              resp.statusCode == 308;
+          if (isRedirect && loc != null && loc.isNotEmpty) {
+            if (redirects >= 4) {
+              throw SourceHttpException('重定向次数过多');
+            }
+            redirects++;
+            final next = currentUri.resolve(loc.trim());
+            if (!_isHttpUri(next)) {
+              throw SourceHttpException('无效的重定向地址：$next');
+            }
+            // 必须修改下一跳复用的 h；修改 hh 会在下一轮被丢弃。
+            final crossOrigin = currentUri.origin != next.origin;
+            h.removeWhere((key, _) {
+              final name = key.toLowerCase();
+              return name == 'host' ||
+                  (crossOrigin &&
+                      const {
+                        'authorization',
+                        'proxy-authorization',
+                        'cookie',
+                        'referer',
+                      }.contains(name));
+            });
+            if (resp.statusCode == 303) {
+              if (currentMethod.toUpperCase() != 'HEAD') currentMethod = 'GET';
+              currentBody = null;
+              h.removeWhere(
+                (key, _) => const {
+                  'content-type',
+                  'content-length',
+                  'transfer-encoding',
+                }.contains(key.toLowerCase()),
+              );
+            }
+            currentUri = next;
+            continue;
+          }
+
+          final decoded = decodeBody(resp.bodyBytes, resp.headers, charset);
+          return SourceResponse(
+            statusCode: resp.statusCode,
+            body: decoded,
+            bytes: resp.bodyBytes,
+            headers: resp.headers,
+            finalUrl: currentUri.toString(),
+          );
+        }
+      } on TimeoutException {
+        if (attempt <= retries) {
+          _resetConnectionPool();
+          continue;
+        }
+        throw SourceHttpException(
+          '请求超时（${(timeout ?? defaultTimeout).inSeconds}s）',
+        );
+      } on SocketException catch (e) {
+        if (attempt <= retries) {
+          _resetConnectionPool();
+          continue;
+        }
+        throw SourceHttpException('网络错误：${e.message}');
+      } on http.ClientException catch (e) {
+        if (attempt <= retries) {
+          _resetConnectionPool();
+          continue;
+        }
+        throw SourceHttpException(_friendlyClientMessage(e));
+      } on HandshakeException catch (e) {
+        if (attempt <= retries) {
+          _resetConnectionPool();
+          continue;
+        }
+        throw SourceHttpException('安全连接失败：${e.message}');
+      }
+    }
+  }
+
+  static bool _isHttpUri(Uri uri) =>
+      (uri.scheme == 'http' || uri.scheme == 'https') && uri.host.isNotEmpty;
+
+  /// 把底层 socket 报错翻译成用户看得懂的提示。
+  static String _friendlyClientMessage(http.ClientException e) {
+    final raw = e.message;
+    if (raw.contains('Connection closed') ||
+        raw.contains('Connection reset') ||
+        raw.contains('Connection terminated')) {
+      return '连接被对方中断（网站不稳定或需要重试）';
+    }
+    if (raw.contains('timed out')) {
+      return '连接超时，请检查网络后重试';
+    }
+    return '请求失败：$raw';
+  }
+
+  void close() => _client.close();
+}
+
+/// 解析 `concurrentRate`：`N/M`（M 秒 N 次）或 `N`（每秒 N 次）。
+class RateGate {
+  RateGate(String? concurrentRate) {
+    final s = concurrentRate?.trim() ?? '';
+    if (s.isEmpty) return;
+    final parts = s.split('/');
+    final n = int.tryParse(parts[0].trim());
+    if (n == null || n <= 0) return;
+    final m = parts.length > 1 ? (int.tryParse(parts[1].trim()) ?? 1) : 1;
+    window = Duration(seconds: math.max(1, m));
+    limit = n;
+  }
+
+  Duration? window;
+  int limit = 0;
+  final List<DateTime> _recent = [];
+
+  bool get active => window != null && limit > 0;
+
+  /// 在允许的速率内等待。
+  Future<void> waitSlot() async {
+    final w = window;
+    if (w == null || limit <= 0) return;
+    while (true) {
+      final now = DateTime.now();
+      _recent.removeWhere((t) => now.difference(t) > w);
+      if (_recent.length < limit) {
+        _recent.add(now);
+        return;
+      }
+      final oldest = _recent.first;
+      final wait = w - now.difference(oldest);
+      await Future<void>.delayed(wait.isNegative ? Duration.zero : wait);
+    }
+  }
+}
+
+// ---------- 编码解码 ----------
+
+/// 解码响应正文：
+/// 显式 charset → Content-Type → meta 探测 → UTF-8 严格 → GBK → UTF-8 宽松。
+String decodeBody(
+  Uint8List bytes,
+  Map<String, String>? headers, [
+  String? charsetHint,
+]) {
+  var cs = charsetHint?.toLowerCase().trim();
+  cs ??= _charsetFromContentType(headers?['content-type']);
+  cs ??= _sniffCharset(bytes);
+  return _decodeWith(bytes, cs);
+}
+
+String? _charsetFromContentType(String? contentType) {
+  if (contentType == null) return null;
+  final m = RegExp(
+    r'charset\s*=\s*["\x27]?([\w-]+)',
+    caseSensitive: false,
+  ).firstMatch(contentType);
+  return m?.group(1)?.toLowerCase();
+}
+
+String? _sniffCharset(Uint8List bytes) {
+  final n = math.min(bytes.length, 2048);
+  final head = latin1.decode(bytes.sublist(0, n), allowInvalid: true);
+  final m = RegExp(
+    r'charset\s*=\s*["\x27]?\s*([\w-]+)',
+    caseSensitive: false,
+  ).firstMatch(head);
+  return m?.group(1)?.toLowerCase();
+}
+
+String _decodeWith(Uint8List bytes, String? cs) {
+  if (cs != null) {
+    if (cs.contains('gb')) {
+      try {
+        return gbk.decode(bytes);
+      } catch (_) {
+        // 落到兜底
+      }
+    }
+    if (cs.contains('utf')) {
+      try {
+        return utf8.decode(bytes);
+      } catch (_) {
+        // 落到兜底
+      }
+    }
+  }
+  // 兜底链：严格 UTF-8 → GBK → 宽松 UTF-8
+  try {
+    return utf8.decode(bytes);
+  } catch (_) {}
+  try {
+    final t = gbk.decode(bytes);
+    if (!t.contains('\uFFFD')) return t;
+  } catch (_) {}
+  return utf8.decode(bytes, allowMalformed: true);
+}
+
+// ---------- 极简 Cookie 暂存 ----------
+
+class _CookieJar {
+  final Map<String, Map<String, ({String value, bool secure})>> _byHost = {};
+
+  void absorb(Uri uri, Map<String, String> headers) {
+    final setCookie = headers['set-cookie'] ?? headers['Set-Cookie'];
+    if (setCookie == null || setCookie.isEmpty) return;
+    final host = uri.host;
+    final jar = _byHost.putIfAbsent(host, () => {});
+    // 粗粒度解析：按 ", " 拆分多枚 Cookie（忽略 Expires 内的逗号误差）
+    for (final raw in setCookie.split(RegExp(r',(?=[^;=]+=)'))) {
+      final first = raw.split(';').first.trim();
+      final eq = first.indexOf('=');
+      if (eq <= 0) continue;
+      final name = first.substring(0, eq).trim();
+      final value = first.substring(eq + 1).trim();
+      if (name.isEmpty) continue;
+      if (value.isEmpty) {
+        jar.remove(name);
+      } else {
+        jar[name] = (
+          value: value,
+          secure: raw
+              .split(';')
+              .skip(1)
+              .any((attribute) => attribute.trim().toLowerCase() == 'secure'),
+        );
+      }
+    }
+  }
+
+  String? headerFor(Uri uri) {
+    final jar = _byHost[uri.host];
+    if (jar == null || jar.isEmpty) return null;
+    final cookies = jar.entries
+        .where((e) => !e.value.secure || uri.scheme == 'https')
+        .map((e) => '${e.key}=${e.value.value}')
+        .join('; ');
+    return cookies.isEmpty ? null : cookies;
+  }
+}
