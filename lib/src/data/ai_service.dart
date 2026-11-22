@@ -239,7 +239,7 @@ class AiService {
         {'role': 'system', 'content': '你是一个连接测试助手。只回复一句简短的中文问候，不超过 10 个字。'},
         {'role': 'user', 'content': '你好'},
       ],
-      maxTokens: 32,
+      maxTokens: 96,
     );
   }
 
@@ -279,26 +279,32 @@ class AiService {
       throw AiException('接口地址格式不对，示例：https://api.openai.com/v1');
     }
 
+    final payload = <String, dynamic>{
+      'model': model.trim(),
+      'messages': messages,
+      'temperature': 0.8,
+      'max_tokens': maxTokens,
+      'stream': false,
+    };
+    final headers = {
+      'Content-Type': 'application/json',
+      // 本地模型（Ollama 等）常常不需要 Key。
+      if (apiKey.trim().isNotEmpty) 'Authorization': 'Bearer ${apiKey.trim()}',
+    };
+
+    Future<http.Response> send(Map<String, dynamic> body) => _client
+        .post(uri, headers: headers, body: jsonEncode(body))
+        .timeout(const Duration(seconds: 75));
+
     http.Response resp;
     try {
-      resp = await _client
-          .post(
-            uri,
-            headers: {
-              'Content-Type': 'application/json',
-              // 本地模型（Ollama 等）常常不需要 Key。
-              if (apiKey.trim().isNotEmpty)
-                'Authorization': 'Bearer ${apiKey.trim()}',
-            },
-            body: jsonEncode({
-              'model': model.trim(),
-              'messages': messages,
-              'temperature': 0.8,
-              'max_tokens': maxTokens,
-              'stream': false,
-            }),
-          )
-          .timeout(const Duration(seconds: 75));
+      resp = await send(payload);
+      // 有些推理模型（如 *-reasoning / *-flash）不接受自定义 temperature，
+      // 会直接 400。这时去掉 temperature 再试一次，别让用户对着报错干瞪眼。
+      if (resp.statusCode == 400 &&
+          resp.body.toLowerCase().contains('temperature')) {
+        resp = await send(Map<String, dynamic>.from(payload)..remove('temperature'));
+      }
     } on TimeoutException {
       throw AiException('请求超时了，检查一下网络，或稍后再试');
     } on FormatException {
@@ -319,18 +325,93 @@ class AiService {
     }
     if (data is! Map) throw AiException('接口返回格式不对，检查接口地址是否为 OpenAI 兼容接口');
 
-    final choices = data['choices'];
-    if (choices is List && choices.isNotEmpty && choices.first is Map) {
-      final first = choices.first as Map;
-      final message = first['message'];
-      final text = message is Map ? message['content'] : first['text'];
-      if (text is String && text.trim().isNotEmpty) return text.trim();
-    }
+    // 不同网关 / 推理模型返回的字段不完全一样（content 可能是数组、
+    // 也可能只有 reasoning_content，或者放在 text 里），一个都别漏。
+    final text = _extractText(data);
+    if (text != null && text.trim().isNotEmpty) return text.trim();
+
     final error = data['error'];
     if (error is Map && error['message'] is String) {
       throw AiException('AI 返回错误：${error['message']}');
     }
-    throw AiException('模型没有返回内容，换个模型或稍后再试');
+    if (_finishReason(data) == 'length') {
+      throw AiException(
+        '模型还没说完就被 max_tokens 截断了（返回内容为空），'
+        '换个不用长篇推理的模型，或把问题问短一点',
+      );
+    }
+    throw AiException(
+      '模型没有返回内容。返回片段：'
+      '${_snippet(utf8.decode(resp.bodyBytes, allowMalformed: true))}',
+    );
+  }
+
+  /// 从各种 OpenAI 兼容返回里抽出正文。
+  ///
+  /// 覆盖：`choices[0].message.content`（字符串 / 多段数组）、
+  /// `message.reasoning_content`（推理模型常见：content 空、思考放这里）、
+  /// `choices[0].text`（老补全接口）、`delta.content`（误开流式）、
+  /// 以及少数网关的 `output_text` / `content` / `result`。
+  static String? _extractText(Map data) {
+    final choices = data['choices'];
+    if (choices is List && choices.isNotEmpty && choices.first is Map) {
+      final first = choices.first as Map;
+      final msg = first['message'];
+      if (msg is Map) {
+        for (final key in [
+          'content',
+          'reasoning_content',
+          'reasoning',
+          'text',
+        ]) {
+          final v = _contentToString(msg[key]);
+          if (v != null && v.trim().isNotEmpty) return v;
+        }
+      }
+      final delta = first['delta'];
+      if (delta is Map) {
+        final v = _contentToString(delta['content']);
+        if (v != null && v.trim().isNotEmpty) return v;
+      }
+      final t = _contentToString(first['text']);
+      if (t != null && t.trim().isNotEmpty) return t;
+    }
+    for (final key in ['output_text', 'content', 'result', 'response']) {
+      final v = _contentToString(data[key]);
+      if (v != null && v.trim().isNotEmpty) return v;
+    }
+    return null;
+  }
+
+  /// content 可能是纯字符串，也可能是 `[{"type":"text","text":"…"}]`。
+  static String? _contentToString(Object? value) {
+    if (value is String) return value;
+    if (value is List) {
+      final buffer = StringBuffer();
+      for (final part in value) {
+        if (part is String) {
+          buffer.write(part);
+        } else if (part is Map) {
+          final t = part['text'] ?? part['content'];
+          if (t is String) buffer.write(t);
+        }
+      }
+      return buffer.isEmpty ? null : buffer.toString();
+    }
+    if (value is Map) {
+      final t = value['text'] ?? value['content'];
+      return t is String ? t : null;
+    }
+    return null;
+  }
+
+  static String? _finishReason(Map data) {
+    final choices = data['choices'];
+    if (choices is List && choices.isNotEmpty && choices.first is Map) {
+      final r = (choices.first as Map)['finish_reason'];
+      if (r is String) return r;
+    }
+    return null;
   }
 
   String _httpError(int code, String body) {
