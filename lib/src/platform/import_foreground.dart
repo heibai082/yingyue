@@ -1,19 +1,40 @@
 // 导入时的前台服务：切后台/锁屏也不被系统冻结
 //
-// 说明：
-// - 真正干活的仍是主 isolate 里的导入 Future，这里只负责把进程钉在前台，
-//   避免 Android 把 App 冻结或回收。
-// - 通知栏会显示「正在导入 x / y」，用户随时能看到进度。
+// 关键点（Android 13/14）：
+// - 必须声明 serviceTypes: dataSync，否则 startService 直接抛异常；
+// - 通知权限要单独申请，没授权时服务能跑但通知不显示；
+// - 需要一个 TaskHandler 回调，插件才会真正把服务拉起来。
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+
+/// 服务的入口回调（必须顶层函数 + vm:entry-point）
+@pragma('vm:entry-point')
+void importTaskCallback() {
+  FlutterForegroundTask.setTaskHandler(_ImportTaskHandler());
+}
+
+/// 我们只借前台服务保活，不需要它做任何事
+class _ImportTaskHandler extends TaskHandler {
+  @override
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {}
+
+  @override
+  void onRepeatEvent(DateTime timestamp) {}
+
+  @override
+  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {}
+}
 
 class ImportForeground {
   static bool _inited = false;
 
-  static void _ensureInit() {
+  /// 最近一次启动失败的原因（页面可展示）
+  static String? lastError;
+
+  static Future<void> _ensureInit() async {
     if (_inited) return;
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
-        channelId: 'sakura_import',
+        channelId: 'yingyue_import',
         channelName: '导入书架',
         channelDescription: '从备份导入书架时保持后台运行',
         channelImportance: NotificationChannelImportance.LOW,
@@ -31,44 +52,7 @@ class ImportForeground {
     _inited = true;
   }
 
-  /// 开始导入时调用；text 是通知栏第一行的文字
-  static Future<void> start(String text) async {
-    try {
-      _ensureInit();
-      if (await FlutterForegroundTask.isRunningService) return;
-      await FlutterForegroundTask.startService(
-        notificationTitle: '嘤阅 · 正在导入',
-        notificationText: text,
-        notificationIcon: null,
-        callback: null,
-      );
-    } catch (_) {
-      // 权限被拒/系统限制时静默降级，不影响导入本身
-    }
-  }
-
-  /// 每处理完一本刷新一次进度
-  static Future<void> update(String text) async {
-    try {
-      if (!await FlutterForegroundTask.isRunningService) return;
-      await FlutterForegroundTask.updateService(
-        notificationTitle: '嘤阅 · 正在导入',
-        notificationText: text,
-      );
-    } catch (_) {}
-  }
-
-  /// 导入结束（成功/失败/中断）都要停掉
-  static Future<void> stop() async {
-    try {
-      if (await FlutterForegroundTask.isRunningService) {
-        await FlutterForegroundTask.stopService();
-      }
-    } catch (_) {}
-  }
-
   /// 检查/申请通知权限；返回是否已授权。
-  /// 后台导入的进度全靠通知栏，没权限就看不到。
   static Future<bool> ensurePermission() async {
     try {
       var p = await FlutterForegroundTask.checkNotificationPermission();
@@ -79,5 +63,53 @@ class ImportForeground {
     } catch (_) {
       return false;
     }
+  }
+
+  /// 开始导入时调用；返回是否真的把服务拉起来了
+  static Future<bool> start(String text) async {
+    try {
+      await _ensureInit();
+      if (await FlutterForegroundTask.isRunningService) {
+        await update(text);
+        return true;
+      }
+      final result = await FlutterForegroundTask.startService(
+        serviceId: 2101,
+        serviceTypes: const [ForegroundServiceTypes.dataSync],
+        notificationTitle: '嘤阅 · 正在导入',
+        notificationText: text,
+        notificationIcon: null,
+        callback: importTaskCallback,
+      );
+      if (result is ServiceRequestSuccess) {
+        lastError = null;
+        return true;
+      }
+      lastError = result.toString();
+      return false;
+    } catch (e) {
+      lastError = e.toString();
+      return false;
+    }
+  }
+
+  /// 刷新通知栏进度
+  static Future<void> update(String text) async {
+    try {
+      if (!await FlutterForegroundTask.isRunningService) return;
+      await FlutterForegroundTask.updateService(
+        notificationTitle: '嘤阅 · 正在导入',
+        notificationText: text,
+      );
+    } catch (_) {}
+  }
+
+  /// 导入结束（含异常）都要停
+  static Future<void> stop() async {
+    try {
+      if (await FlutterForegroundTask.isRunningService) {
+        await FlutterForegroundTask.stopService();
+      }
+    } catch (_) {}
   }
 }

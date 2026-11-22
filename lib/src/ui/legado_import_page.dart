@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../data/book_store.dart';
 import '../data/import_fail_store.dart';
+import '../data/import_task_controller.dart';
 import '../data/import_research.dart';
 import '../data/legado_import.dart';
 import '../platform/import_foreground.dart';
@@ -62,14 +63,39 @@ class _LegadoImportPageState extends State<LegadoImportPage> {
   void initState() {
     super.initState();
     widget.sources.addListener(_onSourcesChanged);
+    ImportTaskController.instance.addListener(_onTaskChanged);
+    // 进来时如果真的还在跑，立刻把进度显示出来
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onTaskChanged());
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadProgress());
   }
 
   @override
   void dispose() {
     widget.sources.removeListener(_onSourcesChanged);
+    ImportTaskController.instance.removeListener(_onTaskChanged);
     _pathCtrl.dispose();
     super.dispose();
+  }
+
+  /// 把全局导入进度镜像到页面状态（退出再进来也能看到）
+  void _onTaskChanged() {
+    if (!mounted) return;
+    final c = ImportTaskController.instance;
+    setState(() {
+      _running = c.running;
+      _done = c.done;
+      _total = c.total;
+      _okCount = c.ok;
+      _failCount = c.fail;
+      _current = c.current;
+      _result = c.result;
+      _error = c.error;
+      if (c.failedTitles.isNotEmpty) {
+        _failedNames
+          ..clear()
+          ..addAll(c.failedTitles);
+      }
+    });
   }
 
   void _onSourcesChanged() {
@@ -663,78 +689,18 @@ class _LegadoImportPageState extends State<LegadoImportPage> {
     }
 
     FocusScope.of(context).unfocus();
-    setState(() {
-      _running = true;
-      _done = 0;
-      _total = 0;
-      _current = '';
-      _okCount = 0;
-      _failCount = 0;
-      if (!_retryFailed) _failedNames.clear();
-      _result = null;
-      _error = null;
-    });
 
-    // 前台服务：切到别的 App / 锁屏也不会被系统冻结
-    unawaited(ImportForeground.start('准备中…'));
+    final ctrl = ImportTaskController.instance;
+    final retry = _retryFailed ? Set<String>.from(_failedNames) : null;
+    _retryFailed = false;
 
-    final read = await LegadoImporter.readBackupFile(path);
-    if (!mounted) return;
-    if (read.error != null) {
-      setState(() {
-        _running = false;
-        _error = read.error;
-      });
-      return;
-    }
-    final total = read.books.length;
-    setState(() => _total = total);
-
-    final result = await const LegadoImporter().importBooks(
-      books: _selectBooks(read.books),
+    await ctrl.start(
+      path: path,
       shelf: widget.shelf,
       sources: widget.sources,
-      bookTimeout: Duration(seconds: _timeoutSec),
+      timeout: Duration(seconds: _timeoutSec),
       concurrency: _concurrency,
-      onCurrent: (title) {
-        // 页面被关掉也要继续刷新通知栏
-        unawaited(ImportForeground.update('正在处理：$title'));
-        if (!mounted) return;
-        setState(() => _current = title);
-      },
-      onBookDone: (title, ok) {
-        if (!mounted) {
-          unawaited(ImportForeground.update('已处理（后台继续）'));
-          return;
-        }
-        setState(() {
-          if (ok) {
-            _okCount++;
-          } else {
-            _failCount++;
-            if (!_failedNames.contains(title)) _failedNames.add(title);
-            _saveProgress();
-            unawaited(ImportFailStore.instance.add(title));
-          }
-        });
-      },
-      onProgress: (done, total, title) {
-        // 导入是长任务，用户可能中途退出页面；回调里必须自己挡一下。
-        if (!mounted) return;
-        setState(() {
-          _done = done;
-          _total = total;
-          _current = title;
-        });
-      },
+      onlyTitles: retry,
     );
-    if (!mounted) return;
-    unawaited(ImportForeground.stop());
-    setState(() {
-      _running = false;
-      _result = result;
-      _done = total;
-      _current = '';
-    });
   }
 }
