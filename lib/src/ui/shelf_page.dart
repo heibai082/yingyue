@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../data/book_store.dart';
 import '../data/import_fail_store.dart';
 import '../data/import_research.dart';
+import 'widgets/failed_books_sheet.dart';
 import '../data/file_scan.dart';
 import '../data/models.dart';
 import '../data/pet_guide.dart';
@@ -184,7 +185,8 @@ class _ShelfPageState extends State<ShelfPage> {
             ),
             subtitle: const Text('点开可逐本重新搜源', style: TextStyle(fontSize: 11)),
             trailing: const Icon(Icons.chevron_right, size: 20),
-            onTap: () => _openFailedSheet(context),
+            onTap: () => showFailedBooksSheet(context,
+                store: widget.store, sources: widget.sourceStore),
           ),
         ),
       ),

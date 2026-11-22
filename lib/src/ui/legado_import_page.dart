@@ -8,6 +8,7 @@ import '../data/book_store.dart';
 import '../data/import_fail_store.dart';
 import '../data/import_task_controller.dart';
 import '../data/import_research.dart';
+import 'widgets/failed_books_sheet.dart';
 import '../data/legado_import.dart';
 import '../platform/import_foreground.dart';
 import '../data/prefs.dart';
@@ -49,6 +50,7 @@ class _LegadoImportPageState extends State<LegadoImportPage> {
   int _timeoutSec = 30;
   int _concurrency = 4;
   bool _retryFailed = false;
+  bool _serviceWarned = false;
   final List<String> _failedNames = <String>[];
   int _failCount = 0;
   int _total = 0;
@@ -90,6 +92,16 @@ class _LegadoImportPageState extends State<LegadoImportPage> {
       _current = c.current;
       _result = c.result;
       _error = c.error;
+      final warn = c.serviceWarning;
+      if (warn != null && !_serviceWarned && c.running) {
+        _serviceWarned = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(warn), duration: const Duration(seconds: 6)),
+          );
+        });
+      }
       if (c.failedTitles.isNotEmpty) {
         _failedNames
           ..clear()
@@ -432,7 +444,8 @@ class _LegadoImportPageState extends State<LegadoImportPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           InkWell(
-            onTap: _failCount > 0 ? () => _showFailedSheet(context) : null,
+            onTap: _failCount > 0 ? () => showFailedBooksSheet(context,
+                    store: widget.shelf, sources: widget.sources) : null,
             borderRadius: BorderRadius.circular(8),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),

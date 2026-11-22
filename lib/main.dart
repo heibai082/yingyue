@@ -5,6 +5,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import 'src/app.dart';
 import 'src/data/book_store.dart';
@@ -18,6 +19,8 @@ import 'src/source/source_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 前台服务要用到端口通信，必须在 runApp 之前初始化
+  FlutterForegroundTask.initCommunicationPort();
   PerfProbe.start();
   // 系统栏模式不阻塞启动：晚几帧生效也没人看得出来
   unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));

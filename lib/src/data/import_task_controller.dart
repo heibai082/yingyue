@@ -22,6 +22,9 @@ class ImportTaskController extends ChangeNotifier {
   final Set<String> failedTitles = <String>{};
   DateTime? startedAt;
 
+  /// 前台服务没起来时的原因（页面提示用）
+  String? serviceWarning;
+
   bool get isBusy => running;
 
   Future<void> start({
@@ -47,7 +50,13 @@ class ImportTaskController extends ChangeNotifier {
     notifyListeners();
 
     // 先把服务拉起来（Android 14 要 serviceTypes，失败也不影响导入本身）
-    await ImportForeground.start('准备中…');
+    serviceWarning = null;
+    final started = await ImportForeground.start('准备中…');
+    if (!started) {
+      serviceWarning =
+          '后台服务没起来：${ImportForeground.lastError ?? '系统限制（去设置里允许通知/后台运行）'}';
+      notifyListeners();
+    }
 
     final read = await LegadoImporter.readBackupFile(path);
     if (read.error != null) {
