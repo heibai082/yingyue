@@ -113,9 +113,9 @@ class UpdateService {
   /// 实测（写入项目时）：前三个均能对 release 下载链返回 200；
   /// 直连兜底通常无效但保留（部分网络环境下可通）。
   static const List<String> downloadMirrors = [
+    'https://ghfast.top/',
     'https://gh-proxy.com/',
     'https://ghproxy.net/',
-    'https://ghfast.top/',
     '',
   ];
 
@@ -168,11 +168,22 @@ class UpdateService {
     void Function(int received, int total)? onProgress,
     bool Function()? isCancelled,
   }) async {
-    for (final mirror in downloadMirrors) {
+    // 候选 URL：先自己的镜像（最快），再国内 GitHub 镜像，最后直连
+    final assetName = Uri.tryParse(info.downloadUrl)?.pathSegments.isNotEmpty ==
+            true
+        ? Uri.parse(info.downloadUrl).pathSegments.last
+        : '';
+    final urls = <String>[
+      if (assetName.isNotEmpty && AppInfo.updateMirror.trim().isNotEmpty)
+        '${AppInfo.updateMirror.trim()}/$assetName',
+      for (final mirror in downloadMirrors) '$mirror${info.downloadUrl}',
+    ];
+
+    for (final url in urls) {
       if (isCancelled?.call() == true) return false;
       try {
         final ok = await _downloadOnce(
-          url: '$mirror${info.downloadUrl}',
+          url: url,
           targetPath: targetPath,
           expectedBytes: info.sizeBytes,
           onProgress: onProgress,
@@ -208,7 +219,7 @@ class UpdateService {
     final total = resp.contentLength ?? expectedBytes;
     try {
       await for (final chunk in resp.stream.timeout(
-        const Duration(seconds: 60),
+        const Duration(seconds: 30),
       )) {
         if (isCancelled?.call() == true) {
           await sink.close();

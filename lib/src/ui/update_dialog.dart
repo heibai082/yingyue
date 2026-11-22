@@ -56,6 +56,12 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   bool _cancelled = false;
   String? _error;
 
+  // 下载测速：每 500ms 采样一次，避免频繁刷新
+  DateTime? _startAt;
+  DateTime? _lastSampleAt;
+  int _lastSampleBytes = 0;
+  double _speedBps = 0;
+
   /// 已下载的安装包路径（done 阶段进入系统安装器）。
   String? _apkPath;
 
@@ -72,6 +78,10 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       _total = widget.info.sizeBytes;
       _cancelled = false;
       _error = null;
+      _startAt = DateTime.now();
+      _lastSampleAt = null;
+      _lastSampleBytes = 0;
+      _speedBps = 0;
     });
     final dirs = await NativeBridge.appDirs();
     final fileName = _fileNameOf(widget.info.downloadUrl);
@@ -82,6 +92,20 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       target,
       onProgress: (received, total) {
         if (!mounted) return;
+        final now = DateTime.now();
+        final last = _lastSampleAt;
+        if (last == null) {
+          _lastSampleAt = now;
+          _lastSampleBytes = received;
+        } else {
+          final elapsedMs = now.difference(last).inMilliseconds;
+          if (elapsedMs >= 500) {
+            final delta = received - _lastSampleBytes;
+            _speedBps = delta > 0 ? delta * 1000 / elapsedMs : 0;
+            _lastSampleAt = now;
+            _lastSampleBytes = received;
+          }
+        }
         setState(() {
           _received = received;
           if (total > 0) _total = total;
@@ -255,6 +279,27 @@ class _UpdateDialogState extends State<_UpdateDialog> {
     ];
   }
 
+  /// 「2.4 MB/s · 已用 25s · 预计还需 18s」；速度过低标红提示
+  String _speedLine() {
+    final start = _startAt;
+    if (start == null) return '';
+    final elapsed = DateTime.now().difference(start);
+    final buf = StringBuffer();
+    if (_speedBps > 0) {
+      buf.write('${formatBytes(_speedBps.round())}/s');
+    } else {
+      buf.write('测速中…');
+    }
+    buf.write(' · 已用 ${elapsed.inSeconds}s');
+    if (_speedBps > 0 && _total > _received) {
+      final left = (_total - _received) / _speedBps;
+      if (left.isFinite && left > 0 && left < 3600) {
+        buf.write(' · 预计还需 ${left.round()}s');
+      }
+    }
+    return buf.toString();
+  }
+
   List<Widget> _buildDownloading(ColorScheme scheme) {
     final percent = _total > 0 ? (_received / _total).clamp(0.0, 1.0) : null;
     return [
@@ -274,6 +319,16 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                   '${formatBytes(_received)} / ${formatBytes(_total)}'
             : formatBytes(_received),
         style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        _speedLine(),
+        style: TextStyle(
+          fontSize: 11,
+          color: _speedBps > 0 && _speedBps < 300 * 1024
+              ? scheme.error
+              : scheme.onSurfaceVariant,
+        ),
       ),
     ];
   }
