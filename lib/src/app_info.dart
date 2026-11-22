@@ -5,7 +5,7 @@ class AppInfo {
   AppInfo._();
 
   /// 语义化版本（不含 build 号）。
-  static const String version = '0.03';
+  static const String version = '0.04';
 
   /// 作者。
   static const String author = 'heibai082';

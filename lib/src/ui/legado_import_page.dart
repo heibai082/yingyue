@@ -9,6 +9,7 @@ import '../data/import_fail_store.dart';
 import '../data/import_task_controller.dart';
 import '../data/import_research.dart';
 import 'widgets/failed_books_sheet.dart';
+import 'source/source_search_page.dart';
 import '../data/legado_import.dart';
 import '../platform/import_foreground.dart';
 import '../data/prefs.dart';
@@ -444,8 +445,26 @@ class _LegadoImportPageState extends State<LegadoImportPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           InkWell(
-            onTap: _failCount > 0 ? () => showFailedBooksSheet(context,
-                    store: widget.shelf, sources: widget.sources) : null,
+            onTap: _failCount > 0
+                ? () => showFailedBooksSheet(
+                      context,
+                      store: widget.shelf,
+                      sources: widget.sources,
+                      onOpenSources: (sheetCtx, title) async {
+                        Navigator.of(sheetCtx).pop();
+                        await Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => SourceSearchPage(
+                              store: widget.sources,
+                              bookStore: widget.shelf,
+                              prefs: widget.prefs,
+                              initialQuery: title,
+                            ),
+                          ),
+                        );
+                      },
+                    )
+                : null,
             borderRadius: BorderRadius.circular(8),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),

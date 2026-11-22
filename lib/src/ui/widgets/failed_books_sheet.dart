@@ -11,20 +11,31 @@ Future<void> showFailedBooksSheet(
   BuildContext context, {
   required BookStore store,
   required SourceStore sources,
+  /// 点「重搜」时跳去搜书页（带书名），由调用方提供
+  required Future<void> Function(BuildContext sheetCtx, String title) onOpenSources,
 }) {
   return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
     isScrollControlled: true,
-    builder: (_) => _FailedBooksSheet(store: store, sources: sources),
+    builder: (_) => _FailedBooksSheet(
+      store: store,
+      sources: sources,
+      onOpenSources: onOpenSources,
+    ),
   );
 }
 
 class _FailedBooksSheet extends StatefulWidget {
-  const _FailedBooksSheet({required this.store, required this.sources});
+  const _FailedBooksSheet({
+    required this.store,
+    required this.sources,
+    required this.onOpenSources,
+  });
 
   final BookStore store;
   final SourceStore sources;
+  final Future<void> Function(BuildContext sheetCtx, String title) onOpenSources;
 
   @override
   State<_FailedBooksSheet> createState() => _FailedBooksSheetState();
@@ -203,9 +214,10 @@ class _FailedBooksSheetState extends State<_FailedBooksSheet> {
                               )
                             : TextButton(
                                 onPressed: _busy == null
-                                    ? () => _retry(it.title, it.author)
+                                    ? () => widget.onOpenSources(
+                                        context, it.title)
                                     : null,
-                                child: const Text('重搜',
+                                child: const Text('看来源',
                                     style: TextStyle(fontSize: 12)),
                               ),
                       );

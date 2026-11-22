@@ -73,6 +73,9 @@ class ImportForeground {
         await update(text);
         return true;
       }
+      // MIUI/省电模式会拦前台服务，先申请忽略电池优化（失败也无妨）
+      try { await FlutterForegroundTask.requestIgnoreBatteryOptimization(); } catch (_) {}
+
       final result = await FlutterForegroundTask.startService(
         serviceId: 2101,
         serviceTypes: const [ForegroundServiceTypes.dataSync],
@@ -85,7 +88,9 @@ class ImportForeground {
         lastError = null;
         return true;
       }
-      lastError = result.toString();
+      lastError = result is ServiceRequestFailure
+          ? result.error.toString()
+          : result.toString();
       return false;
     } catch (e) {
       lastError = e.toString();

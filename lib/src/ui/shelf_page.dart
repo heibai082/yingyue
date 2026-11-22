@@ -185,8 +185,24 @@ class _ShelfPageState extends State<ShelfPage> {
             ),
             subtitle: const Text('点开可逐本重新搜源', style: TextStyle(fontSize: 11)),
             trailing: const Icon(Icons.chevron_right, size: 20),
-            onTap: () => showFailedBooksSheet(context,
-                store: widget.store, sources: widget.sourceStore),
+            onTap: () => showFailedBooksSheet(
+                  context,
+                  store: widget.store,
+                  sources: widget.sourceStore,
+                  onOpenSources: (sheetCtx, title) async {
+                    Navigator.of(sheetCtx).pop();
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => SourceSearchPage(
+                          store: widget.sourceStore,
+                          bookStore: widget.store,
+                          prefs: widget.prefs,
+                          initialQuery: title,
+                        ),
+                      ),
+                    );
+                  },
+                ),
           ),
         ),
       ),
