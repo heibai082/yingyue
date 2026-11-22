@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../platform/import_foreground.dart';
 import '../source/source_store.dart';
 import 'book_store.dart';
+import 'import_fail_store.dart';
 import 'legado_import.dart';
 
 /// 全局导入任务：进度不跟着页面走，退出页面后照常跑，重新进来还能看到。
@@ -75,6 +76,16 @@ class ImportTaskController extends ChangeNotifier {
     total = books.length;
     notifyListeners();
 
+    // 清单里那些其实已经在书架上的，先清理掉
+    try {
+      final onShelf = shelf.books.map((b) => b.title.trim()).toSet();
+      for (final it in List.of(ImportFailStore.instance.items)) {
+        if (onShelf.contains(it.title.trim())) {
+          await ImportFailStore.instance.remove(it.title);
+        }
+      }
+    } catch (_) {}
+
     try {
       result = await LegadoImporter().importBooks(
         books: books,
@@ -90,9 +101,12 @@ class ImportTaskController extends ChangeNotifier {
         onBookDone: (title, good) {
           if (good) {
             ok++;
+            // 已经进书架了：从「待搜源」里划掉，否则用户会看到重复条目
+            ImportFailStore.instance.remove(title);
           } else {
             fail++;
             failedTitles.add(title);
+            ImportFailStore.instance.add(title);
           }
           notifyListeners();
           ImportForeground.update('已处理 $done / $total　✅ $ok　❌ $fail');

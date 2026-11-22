@@ -100,7 +100,12 @@ class _FailedBooksSheetState extends State<_FailedBooksSheet> {
     return AnimatedBuilder(
       animation: ImportFailStore.instance,
       builder: (ctx, _) {
-        final items = ImportFailStore.instance.items;
+        // 已经在书架上的没必要再列出来（顺手从清单删掉）
+        final onShelf =
+            widget.store.books.map((b) => b.title.trim()).toSet();
+        final items = ImportFailStore.instance.items
+            .where((e) => !onShelf.contains(e.title.trim()))
+            .toList();
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
