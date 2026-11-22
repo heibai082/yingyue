@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,8 +21,15 @@ void main() {
       expect(restored.showSplashAnimation, isFalse);
       prefs.dispose();
       restored.dispose();
+      // dispose() 里有一次 fire-and-forget 的落盘，等它写完再删目录，
+      // 否则删到一半文件又被创建出来 → "目录不是空的"（Windows 偶发）。
+      await Future<void>.delayed(const Duration(milliseconds: 80));
     } finally {
-      await dir.delete(recursive: true);
+      try {
+        await dir.delete(recursive: true);
+      } catch (_) {
+        // 测试临时目录，删不掉也不影响结论
+      }
     }
   });
 

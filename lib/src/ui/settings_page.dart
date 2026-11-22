@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 
@@ -53,6 +53,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
   /// 手动检查更新进行中（按钮转圈、避免重复点击）。
   bool _checkingUpdate = false;
+
+  /// 后台正在跑「源仓库同步 + 体检」时不重复触发。
+  bool _sourceSyncRunning = false;
 
   /// 设备上可用的朗读引擎（懒加载）。
   List<String>? _ttsEngines;
@@ -790,25 +793,22 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  /// 手动跑一次「源仓库同步 + 全量体检」，过程中用弹窗显示进度。
+  /// 手动跑一次「源仓库同步 + 体检」。
+  ///
+  /// 刻意**不弹阻塞对话框**：整个流程在后台跑，进度看通知栏，
+  /// 用户可以继续看书 / 翻设置。阅读期间任务会自动暂停让路。
   Future<void> _runSourceSyncNow(BuildContext context) async {
-    final status = ValueNotifier<String>('准备中…');
-    final navigator = Navigator.of(context);
-    unawaited(
-      showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => AlertDialog(
-          title: const Text('正在同步书源'),
-          content: ValueListenableBuilder<String>(
-            valueListenable: status,
-            builder: (_, text, _) => Text(
-              text,
-              style: const TextStyle(fontSize: 13, height: 1.6),
-            ),
-          ),
-          actions: const [SizedBox(height: 4)],
-        ),
+    if (_sourceSyncRunning) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('书源同步已经在跑了，通知栏有进度')),
+      );
+      return;
+    }
+    setState(() => _sourceSyncRunning = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('已在后台开始：拉新书源 + 体检。可以继续看书，通知栏看进度'),
+        duration: Duration(seconds: 4),
       ),
     );
     DailySourceSyncReport report;
@@ -816,13 +816,12 @@ class _SettingsPageState extends State<SettingsPage> {
       report = await DailySourceSync(
         store: widget.sourceStore,
         prefs: widget.prefs,
-      ).runIfDue(force: true, onProgress: (t) => status.value = t);
+      ).runIfDue(force: true);
     } catch (e) {
       report = DailySourceSyncReport(ran: true, error: e.toString());
     }
-    status.dispose();
-    if (navigator.canPop()) navigator.pop();
-    if (!context.mounted) return;
+    if (!mounted) return;
+    setState(() => _sourceSyncRunning = false);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('书源同步：${report.summary}'),
@@ -874,7 +873,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   subtitle: Text(
                     widget.prefs.lastSourceSyncDay.isEmpty
-                        ? '每天首次打开：拉 24 小时内的新书源 → 全量体检（连续失败 2 次自动删）'
+                        ? '每天首次打开：拉 24 小时内的新书源 → 体检（连续失败 2 次自动删，后台跑不挡看书）'
                         : '上次同步 ${widget.prefs.lastSourceSyncDay} · '
                               '拉新 → 全量体检，连续失败 2 次自动删',
                     style: const TextStyle(fontSize: 12),
@@ -888,7 +887,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     style: TextStyle(fontSize: 14),
                   ),
                   subtitle: const Text(
-                    '下载源仓库的新合集 + 体检（后台进行，通知栏可看进度）',
+                    '下载源仓库的新合集 + 体检：后台跑，不挡操作；看书时自动暂停',
                     style: TextStyle(fontSize: 12),
                   ),
                   trailing: const Icon(Icons.chevron_right_rounded),

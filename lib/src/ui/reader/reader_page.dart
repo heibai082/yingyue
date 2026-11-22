@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
+import '../../data/app_activity.dart';
 import '../../data/book_source.dart';
 import '../../data/book_store.dart';
 import '../../data/models.dart';
@@ -160,6 +161,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       pet.setReaderActive(true);
       pet.onReadingSessionStart();
     }
+    // 告诉后台任务（书源体检等）「在看书，先让路」
+    kReaderActive.value = true;
   }
 
   @override
@@ -177,6 +180,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
     _xrayRev.dispose();
     PetStore.shared?.setReaderActive(false);
+    kReaderActive.value = false;
     WidgetsBinding.instance.removeObserver(this);
     _saveProgress();
     widget.prefs.removeListener(_onPrefsChanged);

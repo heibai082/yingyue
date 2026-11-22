@@ -1,4 +1,4 @@
-// 每天第一次打开 App：从「源仓库」拉 24 小时内的新合集 → 并入书源 → 全量体检。
+﻿// 每天第一次打开 App：从「源仓库」拉 24 小时内的新合集 → 并入书源 → 全量体检。
 //
 // 规则（用户要的）：
 //   - 每天只自动跑一次（同一天再开 App 不重复）；
@@ -9,6 +9,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import '../data/prefs.dart';
+import '../data/app_activity.dart';
 import '../platform/import_foreground.dart';
 import 'models.dart';
 import 'online_repo.dart';
@@ -66,7 +67,8 @@ class DailySourceSync {
     this.firstRunWindow = const Duration(days: 7),
     this.maxSourcesPerRun = 400,
     this.keyword = '西游记',
-    this.healthConcurrency = 6,
+    this.healthConcurrency = 3,
+    this.maxChecksPerRun = 300,
   }) : _client = client ?? SourceHubClient();
 
   final SourceStore store;
@@ -89,6 +91,9 @@ class DailySourceSync {
   final String keyword;
 
   final int healthConcurrency;
+
+  /// 单轮体检最多检多少个（按最久没检过的顺序轮转，限制对手机的影响）。
+  final int maxChecksPerRun;
 
   bool _running = false;
   bool get running => _running;
@@ -193,13 +198,16 @@ class DailySourceSync {
               repo ??= OnlineRepo(
                 store: store,
                 concurrency: healthConcurrency,
-                perSourceTimeout: const Duration(seconds: 10),
+                perSourceTimeout: const Duration(seconds: 8),
               );
               return _check(repo!, source, key);
             };
         final controller = SourceHealthController(
           store: store,
           concurrency: healthConcurrency,
+          maxChecksPerRun: maxChecksPerRun,
+          // 在看书就让路：不占网、不占 CPU，退出阅读页自动继续
+          shouldPause: () => kReaderActive.value,
           checker: healthChecker,
           onProgress: (c) => tell(c.running ? '体检中：${c.progressText}' : c.progressText),
         );
@@ -243,7 +251,7 @@ class DailySourceSync {
   ) async {
     try {
       final r = await repo.searchOne(source, key).timeout(
-        const Duration(seconds: 12),
+        const Duration(seconds: 10),
         onTimeout: () => SourceSearchResult(source: source, error: '超时'),
       );
       if (r.error != null) {

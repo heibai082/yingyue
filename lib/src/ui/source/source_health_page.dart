@@ -1,4 +1,4 @@
-﻿// 书源体检：一次跑完所有启用书源的「还能不能用」，并把结果写回书源。
+// 书源体检：一次跑完所有启用书源的「还能不能用」，并把结果写回书源。
 //
 // 规则（用户要的）：
 //   - 连续失败 2 次 → 自动删除（成功一次就清零，避免误杀偶尔抽风的源）；
@@ -8,6 +8,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../data/app_activity.dart';
 import '../../platform/import_foreground.dart';
 import '../../source/models.dart';
 import '../../source/online_repo.dart';
@@ -45,6 +46,8 @@ class _SourceHealthPageState extends State<SourceHealthPage> {
       checker: _check,
       concurrency: _concurrency,
       autoRemove: _autoRemove,
+      // 阅读中自动暂停，别跟看书抢资源
+      shouldPause: () => kReaderActive.value,
       onProgress: _onProgress,
     );
     _controller.addListener(_onChanged);
@@ -205,7 +208,7 @@ class _SourceHealthPageState extends State<SourceHealthPage> {
                   '用测试书名挨个搜一遍启用中的书源：搜到结果算通过，'
                   '超时 / 报错 / 空结果算失败。\n'
                   '同一个源连续失败 ${c.autoRemoveAfter} 次会自动删除（成功一次就清零）。'
-                  '检测走通知栏后台，切走 App 也会继续跑。',
+                  '检测走通知栏后台，切走 App 也会继续跑；看书时自动暂停，退出阅读再继续。',
                   style: TextStyle(
                     fontSize: 12,
                     height: 1.7,

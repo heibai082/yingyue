@@ -62,6 +62,8 @@ class SourceHealthController extends ChangeNotifier {
     this.concurrency = 6,
     this.autoRemoveAfter = 2,
     this.autoRemove = true,
+    this.shouldPause,
+    this.maxChecksPerRun = 0,
     this.onProgress,
   });
 
@@ -76,6 +78,12 @@ class SourceHealthController extends ChangeNotifier {
 
   /// 是否自动删除（页面上的开关）。
   bool autoRemove;
+
+  /// 返回 true 时暂停领新任务（阅读中让路用）。
+  final bool Function()? shouldPause;
+
+  /// 单轮最多检多少个（0 = 全量；按「最久没检过」顺序轮转）。
+  final int maxChecksPerRun;
 
   /// 每检完一个源回调一次（页面用它刷通知栏）。
   final void Function(SourceHealthController c)? onProgress;
@@ -104,9 +112,13 @@ class SourceHealthController extends ChangeNotifier {
 
   bool get cancelled => _cancelRequested;
 
+  /// 因为「正在看书」而临时停手（不进新任务，已发出的请求等它自然结束）。
+  bool paused = false;
+
   /// 通知栏 / 标题栏的一行进度文案。
   String get progressText {
     final parts = <String>[
+      if (paused) '已暂停（正在看书）',
       '已检 $checkedCount/$total',
       '正常 $okCount',
       '失败 $failedCount',
@@ -122,8 +134,9 @@ class SourceHealthController extends ChangeNotifier {
     entries.clear();
     removedSources.clear();
     _cancelRequested = false;
+    paused = false;
     startedAt = DateTime.now();
-    final targets = store.enabled;
+    final targets = _planTargets();
     total = targets.length;
     running = true;
     notifyListeners();
@@ -132,6 +145,8 @@ class SourceHealthController extends ChangeNotifier {
     var next = 0;
     Future<void> worker() async {
       while (true) {
+        if (_cancelRequested) return;
+        await _yieldWhileReading();
         if (_cancelRequested) return;
         final i = next++;
         if (i >= total) return;
@@ -172,6 +187,46 @@ class SourceHealthController extends ChangeNotifier {
     final workers = concurrency.clamp(1, targets.isEmpty ? 1 : targets.length);
     await Future.wait(List.generate(workers, (_) => worker()));
     running = false;
+    paused = false;
+    notifyListeners();
+    onProgress?.call(this);
+  }
+
+  /// 挑这一轮要检的源。
+  ///
+  /// - 优先捡「最久没体检过」的（`healthCheckedAt` 升序），这样限制了单轮数量
+  ///   也能保证所有源轮流被查到；
+  /// - [maxChecksPerRun] > 0 时只取前 N 个（默认全量）。
+  List<BookSource> _planTargets() {
+    final list = store.enabled.toList()
+      ..sort((a, b) => a.healthCheckedAt.compareTo(b.healthCheckedAt));
+    if (maxChecksPerRun > 0 && list.length > maxChecksPerRun) {
+      return list.sublist(0, maxChecksPerRun);
+    }
+    return list;
+  }
+
+  /// 阅读中就让路：不打网络、不占 CPU，等退出阅读页再继续。
+  Future<void> _yieldWhileReading() async {
+    final pause = shouldPause;
+    if (pause == null) return;
+    if (!pause()) {
+      if (paused) {
+        paused = false;
+        notifyListeners();
+        onProgress?.call(this);
+      }
+      return;
+    }
+    if (!paused) {
+      paused = true;
+      notifyListeners();
+      onProgress?.call(this);
+    }
+    while (pause() && !_cancelRequested) {
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+    }
+    paused = false;
     notifyListeners();
     onProgress?.call(this);
   }

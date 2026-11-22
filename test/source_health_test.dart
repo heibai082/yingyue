@@ -147,6 +147,28 @@ void main() {
     expect(store.byUrl(a.bookSourceUrl), isNotNull);
   });
 
+  test('单轮上限 + 优先检最久没测过的（轮转）', () async {
+    final old = _src('old').copyWith(healthCheckedAt: 1000);
+    final mid = _src('mid').copyWith(healthCheckedAt: 2000);
+    final fresh = _src('fresh').copyWith(healthCheckedAt: 3000);
+    final store = SourceStore(initial: [fresh, old, mid]);
+    final checked = <String>[];
+    final controller = SourceHealthController(
+      store: store,
+      checker: (s, k) async {
+        checked.add(s.bookSourceName);
+        return _ok;
+      },
+      maxChecksPerRun: 2,
+    );
+
+    await controller.run('西游记');
+    expect(checked, ['old', 'mid'], reason: '按最久没体检的顺序，且只跑 2 个');
+    expect(controller.checkedCount, 2);
+    expect(store.byUrl(fresh.bookSourceUrl)!.healthCheckedAt, 3000,
+        reason: '没轮到的源不应被改');
+  });
+
   test('健康字段能存进 JSON 再读回来（跨启动累计才有效）', () {
     final a = _src('a', failCount: 1).copyWith(
       healthCheckedAt: 1234567890,
