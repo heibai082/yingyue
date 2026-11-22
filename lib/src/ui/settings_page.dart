@@ -24,7 +24,10 @@ import 'backup_page.dart';
 import 'legado_import_page.dart';
 import 'reader/reader_page.dart';
 import 'reader/reader_settings_panel.dart';
+import '../source/source_sync_log.dart';
+import 'source/source_health_page.dart';
 import 'source/source_manager_page.dart';
+import 'source/source_sync_result_page.dart';
 import 'stats_page.dart';
 import 'update_dialog.dart';
 import 'widgets/cute.dart';
@@ -793,21 +796,20 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  /// 手动跑一次「源仓库同步 + 体检」。
+  /// 只拉新（不体检）：从源仓库下载 24 小时内的新合集并入书源。
   ///
-  /// 刻意**不弹阻塞对话框**：整个流程在后台跑，进度看通知栏，
-  /// 用户可以继续看书 / 翻设置。阅读期间任务会自动暂停让路。
-  Future<void> _runSourceSyncNow(BuildContext context) async {
+  /// 刻意**不弹阻塞对话框**：后台跑，进度看通知栏，用户可以继续看书 / 翻设置。
+  Future<void> _syncSourcesNow(BuildContext context) async {
     if (_sourceSyncRunning) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('书源同步已经在跑了，通知栏有进度')),
+        const SnackBar(content: Text('同步已经在跑了，通知栏有进度')),
       );
       return;
     }
     setState(() => _sourceSyncRunning = true);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('已在后台开始：拉新书源 + 体检。可以继续看书，通知栏看进度'),
+        content: Text('已在后台开始拉新书源；结果会记下来，随时能翻'),
         duration: Duration(seconds: 4),
       ),
     );
@@ -816,16 +818,35 @@ class _SettingsPageState extends State<SettingsPage> {
       report = await DailySourceSync(
         store: widget.sourceStore,
         prefs: widget.prefs,
-      ).runIfDue(force: true);
+      ).runIfDue(force: true, fetchNew: true, healthCheck: false);
     } catch (e) {
       report = DailySourceSyncReport(ran: true, error: e.toString());
     }
     if (!mounted) return;
     setState(() => _sourceSyncRunning = false);
+    final log = report.log;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('书源同步：${report.summary}'),
+        content: Text('源仓库同步：${report.summary}'),
         duration: const Duration(seconds: 5),
+        action: log != null && log.addedCount > 0
+            ? SnackBarAction(
+                label: '看新增',
+                onPressed: () => _showLastAdded(context),
+              )
+            : null,
+      ),
+    );
+  }
+
+  /// 打开「本次新增了哪些书源」。
+  Future<void> _showLastAdded(BuildContext context) async {
+    final log = await SourceSyncLog.load();
+    if (!context.mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            SourceSyncResultPage(log: log, store: widget.sourceStore),
       ),
     );
   }
@@ -883,15 +904,41 @@ class _SettingsPageState extends State<SettingsPage> {
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.sync_rounded),
                   title: const Text(
-                    '立即同步一次',
+                    '同步源仓库（只拉新）',
                     style: TextStyle(fontSize: 14),
                   ),
                   subtitle: const Text(
-                    '下载源仓库的新合集 + 体检：后台跑，不挡操作；看书时自动暂停',
+                    '下载源仓库 24 小时内的新合集并并入书源，不体检；后台跑，不挡操作',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: '查看上次新增了哪些源',
+                        onPressed: () => _showLastAdded(context),
+                        icon: const Icon(Icons.list_alt_rounded, size: 20),
+                      ),
+                      const Icon(Icons.chevron_right_rounded),
+                    ],
+                  ),
+                  onTap: () => _syncSourcesNow(context),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.health_and_safety_outlined),
+                  title: const Text('书源体检', style: TextStyle(fontSize: 14)),
+                  subtitle: const Text(
+                    '逐个测活，连续失败 2 次自动删除；后台跑，看书时自动暂停',
                     style: TextStyle(fontSize: 12),
                   ),
                   trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => _runSourceSyncNow(context),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          SourceHealthPage(store: widget.sourceStore),
+                    ),
+                  ),
                 ),
               ],
             ),

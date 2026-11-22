@@ -101,8 +101,17 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
 
   /// 批量导入；同一 bookSourceUrl 视为更新（保留原启用状态）。
   ({int added, int updated}) addAll(List<BookSource> items) {
+    final r = addAllDetailed(items);
+    return (added: r.added, updated: r.updated);
+  }
+
+  /// 同 [addAll]，但把「这次真正新增的条目」也返回（给「本次新增了哪些源」用）。
+  ({int added, int updated, List<BookSource> addedSources}) addAllDetailed(
+    List<BookSource> items,
+  ) {
     var added = 0;
     var updated = 0;
+    final addedSources = <BookSource>[];
     for (final s in items) {
       final i = _sources.indexWhere((x) => x.bookSourceUrl == s.bookSourceUrl);
       if (i >= 0) {
@@ -114,6 +123,7 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
         updated++;
       } else {
         _sources.add(s);
+        addedSources.add(s);
         added++;
       }
     }
@@ -121,7 +131,7 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
       _saveSoon();
       notifyListeners();
     }
-    return (added: added, updated: updated);
+    return (added: added, updated: updated, addedSources: addedSources);
   }
 
   void remove(String url) {

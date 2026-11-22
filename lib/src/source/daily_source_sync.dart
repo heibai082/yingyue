@@ -1,4 +1,4 @@
-﻿// 每天第一次打开 App：从「源仓库」拉 24 小时内的新合集 → 并入书源 → 全量体检。
+// 每天第一次打开 App：从「源仓库」拉 24 小时内的新合集 → 并入书源 → 全量体检。
 //
 // 规则（用户要的）：
 //   - 每天只自动跑一次（同一天再开 App 不重复）；
@@ -16,6 +16,7 @@ import 'online_repo.dart';
 import 'source_health.dart';
 import 'source_hub.dart';
 import 'source_store.dart';
+import 'source_sync_log.dart';
 
 /// 一次每日同步的结果（给界面提示用）。
 class DailySourceSyncReport {
@@ -29,6 +30,7 @@ class DailySourceSyncReport {
     this.failed = 0,
     this.removed = 0,
     this.error,
+    this.log,
   });
 
   /// 本次是否真的执行了（false = 今天已经跑过 / 用户关了开关）。
@@ -42,6 +44,9 @@ class DailySourceSyncReport {
   final int failed;
   final int removed;
   final String? error;
+
+  /// 本次新增明细（点了「查看新增」用）。
+  final SourceSyncLog? log;
 
   String get summary {
     if (!ran) return '今天已经同步过了';
@@ -110,8 +115,13 @@ class DailySourceSync {
   }
 
   /// 按需执行（[force] = 用户手动点「立即同步」，忽略"今天跑过"）。
+  ///
+  /// [fetchNew] / [healthCheck] 可以分开跑：界面上「同步源仓库」和「书源体检」
+  /// 是两个独立按钮，日常自动任务才两件事都做。
   Future<DailySourceSyncReport> runIfDue({
     bool force = false,
+    bool fetchNew = true,
+    bool healthCheck = true,
     void Function(String text)? onProgress,
   }) async {
     if (_running) return const DailySourceSyncReport(ran: false);
@@ -135,54 +145,76 @@ class DailySourceSync {
       prefs.setSourceSyncDay(today);
       await ImportForeground.startTask(
         title: '嘤阅 · 正在同步书源',
-        text: '检查源仓库有没有新合集…',
+        text: fetchNew ? '检查源仓库有没有新合集…' : '准备体检…',
       );
 
       final seen = _parseSeen(prefs.syncedHubIds);
       var collections = 0;
       var added = 0;
       var updated = 0;
+      final addedItems = <SourceSyncLogItem>[];
       String? hubError;
-      try {
-        final items = await _client.latest();
-        // 第一次跑（没有同步过）放宽到 7 天，先把有价值的源捞进来；
-        // 之后只看 24 小时内「新增」或「更新过」的合集。
-        final cutoff = DateTime.now().subtract(
-          firstRun ? firstRunWindow : window,
-        );
-        final fresh = items.where((i) {
-          final prev = seen[i.id];
-          if (prev == null) return i.isNewerThan(cutoff);
-          // 处理过的合集：时间变新了说明作者更新了内容
-          return i.time != null && i.time!.millisecondsSinceEpoch > prev + 60000;
-        }).toList();
-        for (final item in fresh) {
-          if (added + updated >= maxSourcesPerRun) break;
-          tell('正在下载《${item.title}》…');
-          try {
-            final list = await _client.collection(item.id);
-            final stamp = item.time?.millisecondsSinceEpoch ??
-                DateTime.now().millisecondsSinceEpoch;
-            if (list.isEmpty) {
-              seen[item.id] = stamp;
-              continue;
-            }
-            final report = store.importFromText(jsonEncode(list));
-            if (report.error == null) {
-              added += report.added;
-              updated += report.updated;
+      if (fetchNew) {
+        try {
+          final items = await _client.latest();
+          // 第一次跑（没有同步过）放宽到 7 天，先把有价值的源捞进来；
+          // 之后只看 24 小时内「新增」或「更新过」的合集。
+          final cutoff = DateTime.now().subtract(
+            firstRun ? firstRunWindow : window,
+          );
+          final fresh = items.where((i) {
+            final prev = seen[i.id];
+            if (prev == null) return i.isNewerThan(cutoff);
+            // 处理过的合集：时间变新了说明作者更新了内容
+            return i.time != null &&
+                i.time!.millisecondsSinceEpoch > prev + 60000;
+          }).toList();
+          for (final item in fresh) {
+            if (added + updated >= maxSourcesPerRun) break;
+            tell('正在下载《${item.title}》…');
+            try {
+              final list = await _client.collection(item.id);
+              final stamp = item.time?.millisecondsSinceEpoch ??
+                  DateTime.now().millisecondsSinceEpoch;
+              if (list.isEmpty) {
+                seen[item.id] = stamp;
+                continue;
+              }
+              final rep = store.addAllDetailed(BookSource.listFromJson(list));
+              added += rep.added;
+              updated += rep.updated;
               collections++;
               seen[item.id] = stamp;
-              tell(
-                '已并入 $added 个新书源（$collections 个合集）',
-              );
+              for (final s in rep.addedSources) {
+                addedItems.add(
+                  SourceSyncLogItem(
+                    name: s.bookSourceName,
+                    url: s.bookSourceUrl,
+                    collection: item.title,
+                  ),
+                );
+              }
+              tell('已并入 $added 个新书源（$collections 个合集）');
+            } catch (_) {
+              // 单个合集失败不影响后面的
             }
-          } catch (_) {
-            // 单个合集失败不影响后面的
           }
+        } catch (e) {
+          hubError = e.toString();
         }
-      } catch (e) {
-        hubError = e.toString();
+      }
+
+      // 记录「这次新增了哪些」——重启后还能翻
+      SourceSyncLog? log;
+      if (fetchNew) {
+        log = SourceSyncLog(
+          at: DateTime.now(),
+          items: addedItems,
+          updated: updated,
+          collections: collections,
+          error: hubError,
+        );
+        await log.save();
       }
 
       // 拉完就体检：连续失败 2 次的会自动删除
@@ -190,7 +222,7 @@ class DailySourceSync {
       var healthy = 0;
       var failed = 0;
       var removed = 0;
-      if (store.enabledCount > 0) {
+      if (healthCheck && store.enabledCount > 0) {
         OnlineRepo? repo;
         final healthChecker =
             checker ??
@@ -234,6 +266,7 @@ class DailySourceSync {
         failed: failed,
         removed: removed,
         error: hubError,
+        log: log,
       );
     } catch (e) {
       return DailySourceSyncReport(ran: true, error: e.toString());

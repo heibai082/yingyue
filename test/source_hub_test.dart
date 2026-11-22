@@ -7,9 +7,11 @@ import 'package:http/testing.dart';
 
 import 'package:sakura_read/src/data/prefs.dart';
 import 'package:sakura_read/src/source/daily_source_sync.dart';
+import 'package:sakura_read/src/source/models.dart';
 import 'package:sakura_read/src/source/source_health.dart';
 import 'package:sakura_read/src/source/source_hub.dart';
 import 'package:sakura_read/src/source/source_store.dart';
+import 'package:sakura_read/src/source/source_sync_log.dart';
 
 /// 首页片段（结构照抄线上：h2 > a + p.m-right）。
 String _indexHtml({String time = '3小时前', int id = 1341}) => '''
@@ -208,5 +210,82 @@ void main() {
       );
       expect(sync.isDue(), isFalse);
     });
+
+    test('只拉新（fetchNew 单独跑）：不动体检计数，但记下新增了哪些源', () async {
+      final sync = DailySourceSync(
+        store: store,
+        prefs: prefs,
+        client: clientFor(time: '1小时前', sources: _twoSources()),
+        checker: (s, k) async => const SourceCheckOutcome(ok: false, error: '不该被调用'),
+      );
+      final report = await sync.runIfDue(
+        force: true,
+        fetchNew: true,
+        healthCheck: false,
+      );
+      expect(report.addedSources, 2);
+      expect(report.checked, 0, reason: '只拉新时不体检');
+      expect(store.sources.every((s) => s.healthFailCount == 0), isTrue);
+      // 新增明细：两条，且能按合集合计
+      expect(report.log, isNotNull);
+      expect(report.log!.addedCount, 2);
+      expect(report.log!.byCollection.keys.single, contains('自用整理'));
+      expect(
+        report.log!.items.map((e) => e.name),
+        containsAll(['A 站', 'B 站']),
+      );
+      expect(report.log!.items.first.url, contains('example.com'));
+    });
+
+    test('「本次新增」记录能序列化再读回来（重启后还能翻）', () {
+      final log = SourceSyncLog(
+        at: DateTime(2026, 11, 22, 14, 30),
+        items: const [
+          SourceSyncLogItem(
+            name: 'A 站',
+            url: 'https://a.example.com',
+            collection: '合集一',
+          ),
+          SourceSyncLogItem(
+            name: 'B 站',
+            url: 'https://b.example.com',
+            collection: '合集二',
+          ),
+        ],
+        updated: 3,
+        collections: 2,
+      );
+      final back = SourceSyncLog.fromJson(
+        jsonDecode(jsonEncode(log.toJson())) as Map,
+      );
+      expect(back.addedCount, 2);
+      expect(back.updated, 3);
+      expect(back.collections, 2);
+      expect(back.at, DateTime(2026, 11, 22, 14, 30));
+      expect(back.byCollection['合集一']!.single.name, 'A 站');
+      expect(back.isEmpty, isFalse);
+    });
+  });
+
+  group('批量导入明细', () {
+    test('addAllDetailed 只把「真正新增」的返回，更新不算', () {
+      final store = SourceStore(initial: [_src('https://a.example.com', 'A')]);
+      final r = store.addAllDetailed([
+        _src('https://a.example.com', 'A 改'),
+        _src('https://b.example.com', 'B'),
+      ]);
+      expect(r.added, 1);
+      expect(r.updated, 1);
+      expect(r.addedSources.single.bookSourceName, 'B');
+      // 旧的 addAll 行为不变
+      final r2 = store.addAll([_src('https://c.example.com', 'C')]);
+      expect(r2.added, 1);
+    });
   });
 }
+
+BookSource _src(String url, String name) => BookSource(
+  bookSourceUrl: url,
+  bookSourceName: name,
+);
+
