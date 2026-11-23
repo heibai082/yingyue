@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 
@@ -852,18 +852,27 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  /// 源仓库地址展示文案。
+  /// 源仓库地址展示文案（支持多个）。
   String _hubLabel(String raw) {
-    final target = HubTarget.parse(raw);
-    if (target == null) {
-      return '默认：yckceo 书源合集页（点这里可换成自己的源仓库）';
+    final targets = HubTarget.parseAll(raw, fallbackToDefault: false);
+    if (targets.isEmpty) {
+      return '默认：yckceo 书源合集页（点这里可以加自己的，支持多个）';
     }
-    return '${target.indexUrl}\n（${target.label} · 只下载 24 小时内的）';
+    if (targets.length == 1) {
+      final t = targets.first;
+      return '${t.indexUrl}\n（${t.label} · 只取 24 小时内的）';
+    }
+    return '${targets.length} 个源仓库 · 只取 24 小时内的\n'
+        '${targets.map((t) => '· ${t.baseUrl}（${t.label}）').join('\n')}';
   }
 
-  /// 编辑「源仓库地址」：支持站点根 / 书源页 / 合集页，留空恢复默认。
+  /// 编辑「源仓库地址」：一行一个，支持多个站点；留空恢复默认。
   Future<void> _editHubUrl(BuildContext context) async {
-    final controller = TextEditingController(text: widget.prefs.sourceHubUrl);
+    final controller = TextEditingController(
+      text: widget.prefs.sourceHubUrls.trim().isEmpty
+          ? widget.prefs.sourceHubUrl.trim()
+          : widget.prefs.sourceHubUrls,
+    );
     final value = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -873,7 +882,7 @@ class _SettingsPageState extends State<SettingsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '可以填站点根、书源页或书源合集页；留空恢复默认。\n'
+              '一行一个，可填多个源仓库；站点根、书源页、合集页都行，留空恢复默认。\n'
               '只会下载「24 小时内发布」的条目，处理过的不会再下。',
               style: TextStyle(
                 fontSize: 12,
@@ -884,8 +893,11 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(height: 10),
             TextField(
               controller: controller,
+              minLines: 3,
+              maxLines: 6,
               decoration: const InputDecoration(
-                hintText: 'https://www.yckceo.com/yuedu/shuyuan/index.html',
+                hintText: 'https://www.yckceo.com/yuedu/shuyuan/index.html\n'
+                    'https://another-site.com/yuedu/shuyuans/index.html',
                 border: OutlineInputBorder(),
                 isDense: true,
               ),
@@ -909,21 +921,27 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
     if (value == null) return;
-    if (value.isNotEmpty && HubTarget.parse(value) == null) {
+    final lines = [
+      for (final l in value.split('\n'))
+        if (l.trim().isNotEmpty) l.trim(),
+    ];
+    final bad = lines.where((l) => HubTarget.parse(l) == null).toList();
+    if (bad.isNotEmpty) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('这个网址看不懂，示例：https://www.yckceo.com/yuedu/shuyuan/index.html'),
+        SnackBar(
+          content: Text('这个网址看不懂：${bad.first}\n示例：https://www.yckceo.com/yuedu/shuyuan/index.html'),
         ),
       );
       return;
     }
-    widget.prefs.setSourceHubUrl(value);
+    widget.prefs.setSourceHubUrls(lines.join('\n'));
     if (!context.mounted) return;
+    final count = HubTarget.parseAll(lines.join('\n'), fallbackToDefault: false).length;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          value.isEmpty ? '已恢复默认源仓库' : '已保存：${HubTarget.parse(value)!.indexUrl}',
+          lines.isEmpty ? '已恢复默认源仓库' : '已保存 $count 个源仓库',
         ),
       ),
     );
@@ -970,7 +988,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     style: TextStyle(fontSize: 14),
                   ),
                   subtitle: Text(
-                    _hubLabel(widget.prefs.sourceHubUrl),
+                    _hubLabel(
+                      widget.prefs.sourceHubUrls.trim().isEmpty
+                          ? widget.prefs.sourceHubUrl
+                          : widget.prefs.sourceHubUrls,
+                    ),
                     style: const TextStyle(fontSize: 12),
                   ),
                   trailing: const Icon(Icons.chevron_right_rounded),

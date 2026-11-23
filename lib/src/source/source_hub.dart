@@ -126,6 +126,19 @@ class HubTarget {
     kind: HubKind.collections,
   );
 
+  /// 按行解析多个地址（去重、丢掉看不懂的）；[input] 为空时给默认地址。
+  static List<HubTarget> parseAll(String input, {bool fallbackToDefault = true}) {
+    final out = <HubTarget>[];
+    final seen = <String>{};
+    for (final line in input.split('\n')) {
+      final target = parse(line);
+      if (target == null) continue;
+      if (seen.add(target.indexUrl)) out.add(target);
+    }
+    if (out.isEmpty && fallbackToDefault) return const [defaultTarget];
+    return out;
+  }
+
   /// 把用户输入（根域名 / 书源页 / 合集页）解析成目标；解析不了返回 null。
   ///
   /// 支持的写法：
@@ -221,6 +234,15 @@ class SourceHubClient {
     );
   }
 
+  /// 按多行配置建一组客户端（多个源仓库）。
+  static List<SourceHubClient> fromTargets(
+    String urlsText, {
+    http.Client? client,
+  }) => [
+    for (final t in HubTarget.parseAll(urlsText))
+      SourceHubClient(client: client, baseUrl: t.baseUrl, kind: t.kind),
+  ];
+
   final http.Client _client;
   final String baseUrl;
   final HubKind kind;
@@ -231,6 +253,17 @@ class SourceHubClient {
       '(KHTML, like Gecko) Chrome/122.0 Mobile Safari/537.36';
 
   String get segment => kind == HubKind.collections ? 'shuyuans' : 'shuyuan';
+
+  /// 去重用的站点标识（同一个 id 在不同站是两条）。
+  String get hostKey {
+    final uri = Uri.tryParse(baseUrl);
+    final host = uri?.host ?? baseUrl;
+    return uri?.hasPort == true ? '$host:${uri!.port}' : host;
+  }
+
+  /// 展示用名字。
+  String get label => '${Uri.tryParse(baseUrl)?.host ?? baseUrl}'
+      '（${kind == HubKind.collections ? '合集' : '单源'}）';
 
   /// 首页列表（第 1 页 = 最新）。
   Future<List<SourceHubItem>> latest({int pages = 1}) async {

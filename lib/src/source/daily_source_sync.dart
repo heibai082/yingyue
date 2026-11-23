@@ -72,17 +72,22 @@ class DailySourceSync {
     required this.store,
     required this.prefs,
     SourceHubClient? client,
+    List<SourceHubClient>? clients,
     this.checker,
     this.window = const Duration(hours: 24),
     this.maxSourcesPerRun = 400,
     this.keyword = '西游记',
     this.healthConcurrency = 3,
     this.maxChecksPerRun = 300,
-  }) : _client = client ?? SourceHubClient.fromUrl(prefs.sourceHubUrl);
+  }) : _clients =
+           clients ??
+           (client != null
+               ? [client]
+               : SourceHubClient.fromTargets(prefs.sourceHubUrls));
 
   final SourceStore store;
   final AppPrefs prefs;
-  final SourceHubClient _client;
+  final List<SourceHubClient> _clients;
 
   /// 体检用的检测函数；为空时按线上书源（OnlineRepo）实时搜索。
   final SourceChecker? checker;
@@ -154,55 +159,65 @@ class DailySourceSync {
       var updated = 0;
       var blocked = 0;
       final addedItems = <SourceSyncLogItem>[];
-      String? hubError;
+      var hubError = '';
       if (fetchNew) {
-        try {
-          final items = await _client.latest();
-          // 固定 24 小时窗口：超过一天的都不要（用户明确要求的）
-          final cutoff = DateTime.now().subtract(window);
-          final fresh = items.where((i) {
-            final prev = seen[i.id];
-            if (prev == null) return i.isNewerThan(cutoff);
-            // 处理过的合集：时间变新了说明作者更新了内容
-            return i.time != null &&
-                i.time!.millisecondsSinceEpoch > prev + 60000;
-          }).toList();
-          for (final item in fresh) {
-            if (added + updated >= maxSourcesPerRun) break;
-            tell('正在下载《${item.title}》…');
-            try {
-              final list = await _client.collection(item.id);
-              final stamp = item.time?.millisecondsSinceEpoch ??
-                  DateTime.now().millisecondsSinceEpoch;
-              if (list.isEmpty) {
-                seen[item.id] = stamp;
-                continue;
-              }
-              final rep = store.addAllDetailed(BookSource.listFromJson(list));
-              added += rep.added;
-              updated += rep.updated;
-              blocked += rep.blocked;
-              collections++;
-              seen[item.id] = stamp;
-              for (final s in rep.addedSources) {
-                addedItems.add(
-                  SourceSyncLogItem(
-                    name: s.bookSourceName,
-                    url: s.bookSourceUrl,
-                    collection: item.title,
-                  ),
+        // 多个源仓库：一个个来，单个站点挂了不影响其它站点
+        var hubIndex = 0;
+        for (final hub in _clients) {
+          if (added + updated >= maxSourcesPerRun) break;
+          hubIndex++;
+          final prefix = _clients.length > 1 ? '[$hubIndex/${_clients.length} ${hub.label}] ' : '';
+          try {
+            tell('$prefix检查有没有新条目…');
+            final items = await hub.latest();
+            // 固定 24 小时窗口：超过一天的都不要（用户明确要求的）
+            final cutoff = DateTime.now().subtract(window);
+            final fresh = items.where((i) {
+              final key = _seenKey(hub, i.id);
+              final prev = seen[key];
+              if (prev == null) return i.isNewerThan(cutoff);
+              // 处理过的条目：时间变新了说明作者更新了内容
+              return i.time != null &&
+                  i.time!.millisecondsSinceEpoch > prev + 60000;
+            }).toList();
+            for (final item in fresh) {
+              if (added + updated >= maxSourcesPerRun) break;
+              tell('$prefix正在下载《${item.title}》…');
+              final key = _seenKey(hub, item.id);
+              try {
+                final list = await hub.collection(item.id);
+                final stamp = item.time?.millisecondsSinceEpoch ??
+                    DateTime.now().millisecondsSinceEpoch;
+                if (list.isEmpty) {
+                  seen[key] = stamp;
+                  continue;
+                }
+                final rep = store.addAllDetailed(BookSource.listFromJson(list));
+                added += rep.added;
+                updated += rep.updated;
+                blocked += rep.blocked;
+                collections++;
+                seen[key] = stamp;
+                for (final s in rep.addedSources) {
+                  addedItems.add(
+                    SourceSyncLogItem(
+                      name: s.bookSourceName,
+                      url: s.bookSourceUrl,
+                      collection: item.title,
+                    ),
+                  );
+                }
+                tell(
+                  '$prefix已并入 $added 个新书源（$collections 个合集）'
+                  '${blocked > 0 ? ' · 跳过 $blocked 个今天删过的' : ''}',
                 );
+              } catch (_) {
+                // 单条失败不影响后面的
               }
-              tell(
-                '已并入 $added 个新书源（$collections 个合集）'
-                '${blocked > 0 ? ' · 跳过 $blocked 个今天删过的' : ''}',
-              );
-            } catch (_) {
-              // 单个合集失败不影响后面的
             }
+          } catch (e) {
+            hubError = hubError.isEmpty ? e.toString() : '$hubError；$e';
           }
-        } catch (e) {
-          hubError = e.toString();
         }
       }
 
@@ -214,7 +229,7 @@ class DailySourceSync {
           items: addedItems,
           updated: updated,
           collections: collections,
-          error: hubError,
+          error: hubError.isEmpty ? null : hubError,
         );
         await log.save();
       }
@@ -268,7 +283,7 @@ class DailySourceSync {
         healthy: healthy,
         failed: failed,
         removed: removed,
-        error: hubError,
+        error: hubError.isEmpty ? null : hubError,
         log: log,
       );
     } catch (e) {
@@ -306,21 +321,34 @@ class DailySourceSync {
     }
   }
 
-  /// 记录格式：`id:时间戳`，逗号分隔（兼容旧格式纯 id）。
-  static Map<int, int> _parseSeen(String raw) {
-    final out = <int, int>{};
+  /// 去重键：`站点#id`（不同源仓库的 id 会撞，必须带上站点）。
+  static String _seenKey(SourceHubClient hub, int id) => '${hub.hostKey}#$id';
+
+  /// 记录格式：`站点#id:时间戳`，逗号分隔。
+  ///
+  /// 兼容老格式：`id:时间戳`（那时候只有一个默认源仓库）→ 归到 yckceo 名下。
+  static Map<String, int> _parseSeen(String raw) {
+    final out = <String, int>{};
     for (final part in raw.split(',')) {
       final item = part.trim();
       if (item.isEmpty) continue;
       final bits = item.split(':');
-      final id = int.tryParse(bits.first);
-      if (id == null) continue;
-      out[id] = bits.length > 1 ? (int.tryParse(bits[1]) ?? 0) : 0;
+      if (bits.isEmpty) continue;
+      final head = bits.first.trim();
+      final stamp = bits.length > 1 ? (int.tryParse(bits[1]) ?? 0) : 0;
+      if (head.contains('#')) {
+        out[head] = stamp;
+        continue;
+      }
+      final legacyId = int.tryParse(head);
+      if (legacyId != null) {
+        out['www.yckceo.com#$legacyId'] = stamp;
+      }
     }
     return out;
   }
 
-  static String _joinSeen(Map<int, int> seen) {
+  static String _joinSeen(Map<String, int> seen) {
     final entries = seen.entries.toList()
       ..sort((a, b) => a.value.compareTo(b.value));
     // 只留最近 500 条，够用了，避免 prefs 无限膨胀

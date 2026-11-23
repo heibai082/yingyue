@@ -69,6 +69,29 @@ void main() {
       expect(HubTarget.parse('https://'), isNull);
     });
 
+    test('多行配置：解析出去重后的多个目标，空行忽略', () {
+      final targets = HubTarget.parseAll(
+        'https://a.com/yuedu/shuyuan/index.html\n\n'
+        'b.com/yuedu/shuyuans/index.html\n'
+        'https://a.com/yuedu/shuyuan/index.html',
+      );
+      expect(targets, hasLength(2));
+      expect(targets[0].kind, HubKind.sources);
+      expect(targets[1].kind, HubKind.collections);
+      expect(targets[1].baseUrl, 'https://b.com');
+    });
+
+    test('全部为空 / 非法时回落到默认', () {
+      expect(HubTarget.parseAll('').single.indexUrl,
+          'https://www.yckceo.com/yuedu/shuyuans/index.html');
+      expect(HubTarget.parseAll('  \n  ').single.baseUrl, 'https://www.yckceo.com');
+      expect(
+        HubTarget.parseAll('', fallbackToDefault: false),
+        isEmpty,
+      );
+    });
+
+
     test('单个书源页的列表也能解析（segment=shuyuan）', () {
       final items = parseHubIndex(
         _indexHtml(time: '4小时前', id: 8160, segment: 'shuyuan'),
@@ -318,6 +341,58 @@ void main() {
       expect(store.byUrl(victim.bookSourceUrl), isNull, reason: '今天删过的不该回来');
       // B 站（没删过）可以正常加
       expect(store.byUrl('https://b.example.com'), isNotNull);
+    });
+
+    test('多个源仓库：各自 24 小时拉取，按「站点#id」去重', () async {
+      SourceHubClient mk(String base, String segment, String name) =>
+          SourceHubClient.fromUrl(
+            '$base/yuedu/$segment/index.html',
+            client: MockClient((req) async {
+              if (req.url.path.endsWith('index.html')) {
+                return http.Response.bytes(
+                  utf8.encode(
+                    _indexHtml(time: '1小时前', id: 7, segment: segment),
+                  ),
+                  200,
+                  headers: {'content-type': 'text/html; charset=utf-8'},
+                );
+              }
+              return http.Response.bytes(
+                utf8.encode(
+                  jsonEncode([
+                    {
+                      'bookSourceUrl': 'https://$name.example.com',
+                      'bookSourceName': name,
+                      'searchUrl': 'https://$name.example.com/s?key={{key}}',
+                    },
+                  ]),
+                ),
+                200,
+                headers: {'content-type': 'application/json; charset=utf-8'},
+              );
+            }),
+          );
+
+      final sync = DailySourceSync(
+        store: store,
+        prefs: prefs,
+        clients: [
+          mk('https://a.hub.com', 'shuyuan', 'A'),
+          mk('https://b.hub.com', 'shuyuans', 'B'),
+        ],
+        checker: (s, k) async => const SourceCheckOutcome(ok: true),
+      );
+
+      final r = await sync.runIfDue();
+      expect(r.newCollections, 2, reason: '两个站点各一条');
+      expect(r.addedSources, 2);
+      expect(store.sources, hasLength(2));
+      expect(prefs.syncedHubIds, contains('a.hub.com#7'));
+      expect(prefs.syncedHubIds, contains('b.hub.com#7'));
+
+      prefs.setSourceSyncDay('');
+      final again = await sync.runIfDue(force: true, healthCheck: false);
+      expect(again.newCollections, 0, reason: '两个站点都已处理过，不重复下');
     });
 
     test('关掉开关后 isDue 为 false', () {

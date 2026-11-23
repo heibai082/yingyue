@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -187,8 +187,17 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   /// 已经处理过的源仓库合集 id（逗号分隔，避免重复下载同一个合集）。
   String syncedHubIds = '';
 
-  /// 自定义的源仓库网址（空 = 用默认的 yckceo 书源合集页）。
+  /// 自定义的源仓库网址（只留一个，旧字段；新代码看 [sourceHubUrls]）。
   String sourceHubUrl = '';
+
+  /// 自定义的源仓库网址列表（每行一个；空 = 用默认的 yckceo 书源合集页）。
+  String sourceHubUrls = '';
+
+  /// 解析后的源仓库地址列表：空 / 全是无效地址时回落到默认。
+  List<String> get sourceHubUrlList => [
+    for (final line in sourceHubUrls.split('\n'))
+      if (line.trim().isNotEmpty) line.trim(),
+  ];
 
   // ---- AI 助手（小樱） ----
   /// 兼容 OpenAI Chat Completions 的接口地址（如 https://api.openai.com/v1）。
@@ -390,6 +399,11 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           lastSourceSyncDay = data['lastSourceSyncDay'] as String? ?? '';
           syncedHubIds = data['syncedHubIds'] as String? ?? '';
           sourceHubUrl = data['sourceHubUrl'] as String? ?? '';
+          sourceHubUrls = data['sourceHubUrls'] as String? ?? '';
+          // 老版本只存了一个地址：迁移成列表
+          if (sourceHubUrls.trim().isEmpty && sourceHubUrl.trim().isNotEmpty) {
+            sourceHubUrls = sourceHubUrl.trim();
+          }
           // v5：新手引导是否已看过
           guideSeen = data['guideSeen'] as bool? ?? false;
           // v6：首启使用条款
@@ -623,10 +637,19 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   }
 
   /// 记录处理过的源仓库合集 id。
-  /// 自定义源仓库网址（空 = 默认合集页）。
+  /// 自定义源仓库网址列表（每行一个，空 = 默认合集页）。
+  void setSourceHubUrls(String v) {
+    if (sourceHubUrls == v) return;
+    sourceHubUrls = v;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  /// 自定义源仓库网址（单个，旧入口；会同步写进列表）。
   void setSourceHubUrl(String v) {
-    if (sourceHubUrl == v) return;
+    if (sourceHubUrl == v && sourceHubUrls.trim() == v.trim()) return;
     sourceHubUrl = v;
+    sourceHubUrls = v;
     _saveSoon();
     notifyListeners();
   }
@@ -982,6 +1005,7 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
         'lastSourceSyncDay': lastSourceSyncDay,
         'syncedHubIds': syncedHubIds,
         'sourceHubUrl': sourceHubUrl,
+        'sourceHubUrls': sourceHubUrls,
         'aiBaseUrl': aiBaseUrl,
         'aiModel': aiModel,
         'aiIncludeReading': aiIncludeReading,
