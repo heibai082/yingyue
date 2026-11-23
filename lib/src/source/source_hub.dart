@@ -95,11 +95,76 @@ DateTime? parseHubTime(String raw, {DateTime? now}) {
   return null;
 }
 
-/// 解析首页 HTML，拿到合集列表（按页面顺序 = 新的在前）。
-List<SourceHubItem> parseHubIndex(String html, {String baseUrl = 'https://www.yckceo.com', DateTime? now}) {
+/// 源仓库的两种列表。
+enum HubKind {
+  /// 书源合集（一个合集里很多源）。
+  collections,
+
+  /// 单个书源（一条一个源）。
+  sources,
+}
+
+/// 用户填的「源仓库网址」解析结果。
+class HubTarget {
+  const HubTarget({required this.baseUrl, required this.kind});
+
+  /// 站点根（形如 https://www.yckceo.com，不带 /yuedu/…）。
+  final String baseUrl;
+  final HubKind kind;
+
+  /// `/yuedu/` 后面那段路径。
+  String get segment =>
+      kind == HubKind.collections ? 'shuyuans' : 'shuyuan';
+
+  String get label =>
+      kind == HubKind.collections ? '书源合集' : '单个书源';
+
+  String get indexUrl => '$baseUrl/yuedu/$segment/index.html';
+
+  static const HubTarget defaultTarget = HubTarget(
+    baseUrl: 'https://www.yckceo.com',
+    kind: HubKind.collections,
+  );
+
+  /// 把用户输入（根域名 / 书源页 / 合集页）解析成目标；解析不了返回 null。
+  ///
+  /// 支持的写法：
+  /// - `https://www.yckceo.com`
+  /// - `https://www.yckceo.com/yuedu/shuyuan/index.html`（单个书源）
+  /// - `https://www.yckceo.com/yuedu/shuyuans/index.html`（合集）
+  /// - 省略协议时自动补 https://
+  static HubTarget? parse(String input) {
+    var raw = input.trim();
+    if (raw.isEmpty) return null;
+    if (!raw.contains('://')) raw = 'https://$raw';
+    final uri = Uri.tryParse(raw);
+    if (uri == null || uri.host.isEmpty) return null;
+    final path = uri.path;
+    // 书源合集用 shuyuans，单个书源用 shuyuan —— 先判长的，别被短的前缀骗了
+    final kind = path.contains('/yuedu/shuyuans')
+        ? HubKind.collections
+        : path.contains('/yuedu/shuyuan')
+        ? HubKind.sources
+        : HubKind.collections;
+    return HubTarget(
+      baseUrl: '${uri.scheme}://${uri.authority}',
+      kind: kind,
+    );
+  }
+}
+
+/// 解析首页 HTML，拿到条目列表（按页面顺序 = 新的在前）。
+///
+/// [segment]：`shuyuans`（合集页）或 `shuyuan`（单个书源页），两页的 HTML 结构一致。
+List<SourceHubItem> parseHubIndex(
+  String html, {
+  String baseUrl = 'https://www.yckceo.com',
+  String segment = 'shuyuans',
+  DateTime? now,
+}) {
   final items = <SourceHubItem>[];
   final block = RegExp(
-    r'<h2[^>]*>\s*<a href="(?<href>/yuedu/shuyuans/content/id/(?<id>\d+)\.html)"[^>]*>(?<title>.*?)</a>\s*'
+    '<h2[^>]*>\\s*<a href="(?<href>/yuedu/$segment/content/id/(?<id>\\d+)\\.html)"[^>]*>(?<title>.*?)</a>\\s*'
     r'(?:<p class="m-right"[^>]*>(?<time>[^<]*)</p>)?',
     dotAll: true,
   );
@@ -115,7 +180,7 @@ List<SourceHubItem> parseHubIndex(String html, {String baseUrl = 'https://www.yc
       SourceHubItem(
         id: id,
         title: title,
-        jsonUrl: '$baseUrl/yuedu/shuyuans/json/id/$id.json',
+        jsonUrl: '$baseUrl/yuedu/$segment/json/id/$id.json',
         time: parseHubTime(rawTime, now: now),
         rawTime: rawTime,
         sourceCount: int.tryParse(countMatch?.group(1) ?? '') ?? 0,
@@ -142,23 +207,37 @@ class SourceHubClient {
   SourceHubClient({
     http.Client? client,
     this.baseUrl = 'https://www.yckceo.com',
+    this.kind = HubKind.collections,
     this.timeout = const Duration(seconds: 20),
   }) : _client = client ?? http.Client();
 
+  /// 按用户配置（prefs.sourceHubUrl）建客户端；没配就用默认的合集页。
+  factory SourceHubClient.fromUrl(String url, {http.Client? client}) {
+    final target = HubTarget.parse(url) ?? HubTarget.defaultTarget;
+    return SourceHubClient(
+      client: client,
+      baseUrl: target.baseUrl,
+      kind: target.kind,
+    );
+  }
+
   final http.Client _client;
   final String baseUrl;
+  final HubKind kind;
   final Duration timeout;
 
   static const _ua =
       'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/122.0 Mobile Safari/537.36';
 
-  /// 首页「书源合集」列表（第 1 页 = 最新）。
+  String get segment => kind == HubKind.collections ? 'shuyuans' : 'shuyuan';
+
+  /// 首页列表（第 1 页 = 最新）。
   Future<List<SourceHubItem>> latest({int pages = 1}) async {
     final out = <SourceHubItem>[];
     for (var page = 1; page <= pages; page++) {
       final uri = Uri.parse(
-        '$baseUrl/yuedu/shuyuans/index.html${page > 1 ? '?page=$page' : ''}',
+        '$baseUrl/yuedu/$segment/index.html${page > 1 ? '?page=$page' : ''}',
       );
       final resp = await _client
           .get(uri, headers: const {'User-Agent': _ua})
@@ -167,19 +246,19 @@ class SourceHubClient {
         throw HubException('列表页 HTTP ${resp.statusCode}', uri: uri);
       }
       final html = utf8.decode(resp.bodyBytes, allowMalformed: true);
-      out.addAll(parseHubIndex(html, baseUrl: baseUrl));
+      out.addAll(parseHubIndex(html, baseUrl: baseUrl, segment: segment));
     }
     return out;
   }
 
-  /// 下载某个合集的全部书源（阅读 3.0 数组）。
+  /// 下载某一条的全部书源（阅读 3.0 数组；单个书源页就是一条一个）。
   Future<List<Map<String, dynamic>>> collection(int item) async {
-    final uri = Uri.parse('$baseUrl/yuedu/shuyuans/json/id/$item.json');
+    final uri = Uri.parse('$baseUrl/yuedu/$segment/json/id/$item.json');
     final resp = await _client
         .get(uri, headers: const {'User-Agent': _ua})
         .timeout(timeout);
     if (resp.statusCode != 200) {
-      throw HubException('合集 HTTP ${resp.statusCode}', uri: uri);
+      throw HubException('下载 HTTP ${resp.statusCode}', uri: uri);
     }
     final decoded = jsonDecode(utf8.decode(resp.bodyBytes, allowMalformed: true));
     final list = decoded is List

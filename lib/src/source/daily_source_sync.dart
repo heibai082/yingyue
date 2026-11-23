@@ -74,12 +74,11 @@ class DailySourceSync {
     SourceHubClient? client,
     this.checker,
     this.window = const Duration(hours: 24),
-    this.firstRunWindow = const Duration(days: 7),
     this.maxSourcesPerRun = 400,
     this.keyword = '西游记',
     this.healthConcurrency = 3,
     this.maxChecksPerRun = 300,
-  }) : _client = client ?? SourceHubClient();
+  }) : _client = client ?? SourceHubClient.fromUrl(prefs.sourceHubUrl);
 
   final SourceStore store;
   final AppPrefs prefs;
@@ -88,11 +87,8 @@ class DailySourceSync {
   /// 体检用的检测函数；为空时按线上书源（OnlineRepo）实时搜索。
   final SourceChecker? checker;
 
-  /// 只认这个时间窗内发布的合集（日常）。
+  /// 只认这个时间窗内发布的条目（固定 24 小时：超过一天的都不要）。
   final Duration window;
-
-  /// 第一次跑（从没同步过）时放宽到这个窗口，先把有价值的源捞进来。
-  final Duration firstRunWindow;
 
   /// 单次最多并入多少个书源（防止一口气塞进几千个死源）。
   final int maxSourcesPerRun;
@@ -135,7 +131,6 @@ class DailySourceSync {
       return const DailySourceSyncReport(ran: false);
     }
     // 注意：必须在「占坑」之前判断，否则 lastSourceSyncDay 已经被写成今天
-    final firstRun = prefs.lastSourceSyncDay.isEmpty;
     _running = true;
 
     void tell(String text) {
@@ -163,11 +158,8 @@ class DailySourceSync {
       if (fetchNew) {
         try {
           final items = await _client.latest();
-          // 第一次跑（没有同步过）放宽到 7 天，先把有价值的源捞进来；
-          // 之后只看 24 小时内「新增」或「更新过」的合集。
-          final cutoff = DateTime.now().subtract(
-            firstRun ? firstRunWindow : window,
-          );
+          // 固定 24 小时窗口：超过一天的都不要（用户明确要求的）
+          final cutoff = DateTime.now().subtract(window);
           final fresh = items.where((i) {
             final prev = seen[i.id];
             if (prev == null) return i.isNewerThan(cutoff);

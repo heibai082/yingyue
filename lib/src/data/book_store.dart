@@ -216,6 +216,18 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
     notifyListeners();
   }
 
+  /// 换掉某本书的封面（「一键更新封面」用）。返回是否真的更新了。
+  bool setCover(String id, String coverPath) {
+    final b = byId(id);
+    if (b == null) return false;
+    if (b.coverPath == coverPath && !b.generatedCover) return false;
+    b.coverPath = coverPath;
+    b.generatedCover = false;
+    _saveSoon();
+    notifyListeners();
+    return true;
+  }
+
   void markFinished(String id) {
     final b = byId(id);
     if (b == null) return;

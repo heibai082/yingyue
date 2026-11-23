@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 
@@ -24,6 +24,7 @@ import 'backup_page.dart';
 import 'legado_import_page.dart';
 import 'reader/reader_page.dart';
 import 'reader/reader_settings_panel.dart';
+import '../source/source_hub.dart';
 import '../source/source_sync_log.dart';
 import 'source/source_health_page.dart';
 import 'source/source_manager_page.dart';
@@ -851,6 +852,83 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  /// 源仓库地址展示文案。
+  String _hubLabel(String raw) {
+    final target = HubTarget.parse(raw);
+    if (target == null) {
+      return '默认：yckceo 书源合集页（点这里可换成自己的源仓库）';
+    }
+    return '${target.indexUrl}\n（${target.label} · 只下载 24 小时内的）';
+  }
+
+  /// 编辑「源仓库地址」：支持站点根 / 书源页 / 合集页，留空恢复默认。
+  Future<void> _editHubUrl(BuildContext context) async {
+    final controller = TextEditingController(text: widget.prefs.sourceHubUrl);
+    final value = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('源仓库地址'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '可以填站点根、书源页或书源合集页；留空恢复默认。\n'
+              '只会下载「24 小时内发布」的条目，处理过的不会再下。',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.6,
+                color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                hintText: 'https://www.yckceo.com/yuedu/shuyuan/index.html',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ''),
+            child: const Text('恢复默认'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (value == null) return;
+    if (value.isNotEmpty && HubTarget.parse(value) == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('这个网址看不懂，示例：https://www.yckceo.com/yuedu/shuyuan/index.html'),
+        ),
+      );
+      return;
+    }
+    widget.prefs.setSourceHubUrl(value);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          value.isEmpty ? '已恢复默认源仓库' : '已保存：${HubTarget.parse(value)!.indexUrl}',
+        ),
+      ),
+    );
+  }
+
   Widget _sourceCard(BuildContext context) {
     return SoftCard(
       child: Column(
@@ -884,6 +962,20 @@ class _SettingsPageState extends State<SettingsPage> {
             builder: (_, _) => Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.link_rounded),
+                  title: const Text(
+                    '源仓库地址',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  subtitle: Text(
+                    _hubLabel(widget.prefs.sourceHubUrl),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _editHubUrl(context),
+                ),
                 SwitchListTile.adaptive(
                   contentPadding: EdgeInsets.zero,
                   value: widget.prefs.autoSyncSources,

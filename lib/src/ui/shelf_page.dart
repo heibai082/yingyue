@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../data/book_store.dart';
+import '../data/cover_refresher.dart';
 import '../data/import_fail_store.dart';
 import '../data/import_research.dart';
 import 'widgets/failed_books_sheet.dart';
@@ -509,6 +510,14 @@ class _ShelfPageState extends State<ShelfPage> {
                   icon: const Icon(Icons.tune_rounded, color: Colors.white),
                   tooltip: '排列方式',
                 ),
+                IconButton(
+                  onPressed: _refreshCovers,
+                  icon: const Icon(
+                    Icons.image_outlined,
+                    color: Colors.white,
+                  ),
+                  tooltip: '一键更新封面',
+                ),
               ],
             ),
           ],
@@ -630,8 +639,62 @@ class _ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  void _openSearch(BuildContext context) {
-    showSearch(
+  /// 一键更新封面：只补「没有真封面」的在线书，后台跑（通知栏看进度）。
+  Future<void> _refreshCovers() async {
+    final missing = widget.store.books
+        .where(
+          (b) =>
+              b.format == BookFormat.online &&
+              (b.coverPath == null ||
+                  b.coverPath!.isEmpty ||
+                  b.generatedCover),
+        )
+        .length;
+    if (missing == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('书架里的封面都是最新的，没有需要更新的')),
+      );
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('一键更新封面'),
+        content: Text(
+          '有 $missing 本在线书还没有封面（或者只是占位图），会从书源重新抓一遍；'
+          '已经有封面的不会重复下载。\n\n'
+          '过程在后台跑，通知栏能看到进度；看书时自动暂停。',
+          style: const TextStyle(fontSize: 13, height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('开始更新'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已开始：$missing 本，通知栏看进度')),
+    );
+    final refresher = CoverRefresher(
+      store: widget.store,
+      sources: widget.sourceStore,
+    );
+    final result = await refresher.run();
+    refresher.dispose();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('封面更新：${result.summary}')),
+    );
+  }
+
+  void _openSearch(BuildContext context) {    showSearch(
       context: context,
       delegate: _ShelfSearchDelegate(
         widget.store,

@@ -14,10 +14,14 @@ import 'package:sakura_read/src/source/source_store.dart';
 import 'package:sakura_read/src/source/source_sync_log.dart';
 
 /// 首页片段（结构照抄线上：h2 > a + p.m-right）。
-String _indexHtml({String time = '3小时前', int id = 1341}) => '''
+String _indexHtml({
+  String time = '3小时前',
+  int id = 1341,
+  String segment = 'shuyuans',
+}) => '''
 <div class="layui-card-body">
   <div class="ylist">
-    <h2><a href="/yuedu/shuyuans/content/id/$id.html">自用整理·精品书源</a>
+    <h2><a href="/yuedu/$segment/content/id/$id.html">自用整理·精品书源</a>
       <p class="m-right" style="top: 3px;">$time</p>
     </h2>
     <span class="layui-badge-rim">源数量:2</span>
@@ -39,6 +43,46 @@ List<Map<String, dynamic>> _twoSources() => [
 ];
 
 void main() {
+  group('源仓库地址解析', () {
+    test('站点根 / 书源页 / 合集页都能认出来', () {
+      expect(HubTarget.parse('https://www.yckceo.com')!.kind, HubKind.collections);
+      expect(
+        HubTarget.parse('https://www.yckceo.com/yuedu/shuyuan/index.html')!.kind,
+        HubKind.sources,
+      );
+      expect(
+        HubTarget.parse('https://www.yckceo.com/yuedu/shuyuans/index.html')!.kind,
+        HubKind.collections,
+      );
+    });
+
+    test('省略协议自动补 https；保留自定义端口', () {
+      final t = HubTarget.parse('hub.example.com:8443/yuedu/shuyuan/index.html')!;
+      expect(t.baseUrl, 'https://hub.example.com:8443');
+      expect(t.kind, HubKind.sources);
+      expect(t.indexUrl, 'https://hub.example.com:8443/yuedu/shuyuan/index.html');
+    });
+
+    test('空 / 非法返回 null', () {
+      expect(HubTarget.parse(''), isNull);
+      expect(HubTarget.parse('   '), isNull);
+      expect(HubTarget.parse('https://'), isNull);
+    });
+
+    test('单个书源页的列表也能解析（segment=shuyuan）', () {
+      final items = parseHubIndex(
+        _indexHtml(time: '4小时前', id: 8160, segment: 'shuyuan'),
+        segment: 'shuyuan',
+      );
+      expect(items, hasLength(1));
+      expect(items.first.id, 8160);
+      expect(
+        items.first.jsonUrl,
+        'https://www.yckceo.com/yuedu/shuyuan/json/id/8160.json',
+      );
+    });
+  });
+
   group('时间解析', () {
     final now = DateTime(2026, 11, 22, 14, 0);
 
@@ -190,7 +234,7 @@ void main() {
       expect(store.sources, isEmpty);
     });
 
-    test('第一次运行会放宽到 7 天，把三天前的合集也捞进来', () async {
+    test('第一次运行也只认 24 小时：三天前的合集不导入', () async {
       final sync = DailySourceSync(
         store: store,
         prefs: prefs,
@@ -198,8 +242,46 @@ void main() {
         checker: (s, k) async => const SourceCheckOutcome(ok: true),
       );
       final report = await sync.runIfDue();
+      expect(report.newCollections, 0);
+      expect(store.sources, isEmpty);
+    });
+
+    test('自填源仓库地址：单个书源页也能同步', () async {
+      final requests = <String>[];
+      final client = SourceHubClient.fromUrl(
+        'https://hub.example.com/yuedu/shuyuan/index.html',
+        client: MockClient((req) async {
+          requests.add(req.url.toString());
+          if (req.url.path.endsWith('index.html')) {
+            return http.Response.bytes(
+              utf8.encode(
+                _indexHtml(time: '2小时前', id: 8160, segment: 'shuyuan'),
+              ),
+              200,
+              headers: {'content-type': 'text/html; charset=utf-8'},
+            );
+          }
+          return http.Response.bytes(
+            utf8.encode(jsonEncode(_twoSources())),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      );
+      expect(client.baseUrl, 'https://hub.example.com');
+      expect(client.kind, HubKind.sources);
+
+      final sync = DailySourceSync(
+        store: store,
+        prefs: prefs,
+        client: client,
+        checker: (s, k) async => const SourceCheckOutcome(ok: true),
+      );
+      final report = await sync.runIfDue();
       expect(report.newCollections, 1);
-      expect(store.sources, hasLength(2));
+      expect(report.addedSources, 2);
+      expect(requests.first, contains('/yuedu/shuyuan/index.html'));
+      expect(requests.last, contains('/yuedu/shuyuan/json/id/8160.json'));
     });
 
     test('体检删掉的源，当天同步不会又被加回来', () async {

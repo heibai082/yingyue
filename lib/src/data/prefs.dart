@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -186,6 +186,9 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
 
   /// 已经处理过的源仓库合集 id（逗号分隔，避免重复下载同一个合集）。
   String syncedHubIds = '';
+
+  /// 自定义的源仓库网址（空 = 用默认的 yckceo 书源合集页）。
+  String sourceHubUrl = '';
 
   // ---- AI 助手（小樱） ----
   /// 兼容 OpenAI Chat Completions 的接口地址（如 https://api.openai.com/v1）。
@@ -386,6 +389,7 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           autoSyncSources = data['autoSyncSources'] as bool? ?? true;
           lastSourceSyncDay = data['lastSourceSyncDay'] as String? ?? '';
           syncedHubIds = data['syncedHubIds'] as String? ?? '';
+          sourceHubUrl = data['sourceHubUrl'] as String? ?? '';
           // v5：新手引导是否已看过
           guideSeen = data['guideSeen'] as bool? ?? false;
           // v6：首启使用条款
@@ -619,6 +623,14 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   }
 
   /// 记录处理过的源仓库合集 id。
+  /// 自定义源仓库网址（空 = 默认合集页）。
+  void setSourceHubUrl(String v) {
+    if (sourceHubUrl == v) return;
+    sourceHubUrl = v;
+    _saveSoon();
+    notifyListeners();
+  }
+
   void setSyncedHubIds(String v) {
     if (syncedHubIds == v) return;
     syncedHubIds = v;
@@ -969,6 +981,7 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
         'autoSyncSources': autoSyncSources,
         'lastSourceSyncDay': lastSourceSyncDay,
         'syncedHubIds': syncedHubIds,
+        'sourceHubUrl': sourceHubUrl,
         'aiBaseUrl': aiBaseUrl,
         'aiModel': aiModel,
         'aiIncludeReading': aiIncludeReading,
