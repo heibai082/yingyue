@@ -1,4 +1,4 @@
-// 漫画「广告页」过滤。
+﻿// 漫画「广告页」过滤。
 //
 // 有的图片站在正文里插一张推广页（包子漫画就是：一张白底大字的「安装包子漫画 APP」
 // + 一堆二维码）。它和正文页混在同一个图片列表里，光看 URL 区分不出来，
@@ -180,27 +180,65 @@ class ImageProbe {
 
 /// 按尺寸挑出广告页并剔除；看不出来就原样返回。
 ///
-/// 判定：宽是这一话里最窄的、比中位宽窄 5% 以上、且高宽比 ≥ 1.55。
-/// 这样正常的长条页（宽度和别的页一样）不会被误删。
+/// 两种广告形态（包子漫画两种都出现过）：
+///   1. **又窄又长的整页**：一张 800 宽的长图，比正文页窄、高宽比 ≥ 1.55；
+///   2. **又宽又短的横幅**：贴在正文页之间的「安装 App + 二维码」条，
+///      高宽比 ≤ 0.55（宽是高的近两倍以上）。
+/// 另外极小的图（logo / 二维码小图标）也去掉。
+///
+/// 保护：无论删多少，至少留下 2 张、且不能删掉一半以上——宁可留着广告，
+/// 也不能把正文当成广告删了。
 List<String> dropAdPages(List<String> urls, Map<String, ImagePixels> sizes) {
   if (urls.length < 4) return urls;
-  final widths = [
+  final known = [
     for (final u in urls)
-      if (sizes[u] != null) sizes[u]!.width,
-  ]..sort();
-  if (widths.length < 3) return urls;
+      if (sizes[u] != null) sizes[u]!,
+  ];
+  if (known.length < 3) return urls;
+
+  final widths = [for (final px in known) px.width]..sort();
   final median = widths[widths.length ~/ 2];
   final minWidth = widths.first;
-  if (minWidth >= median * 0.95) return urls;
-  return [
-    for (final u in urls)
-      if (!_looksLikeAd(sizes[u], minWidth, median)) u,
-  ];
+
+  final kept = <String>[];
+  for (final u in urls) {
+    final px = sizes[u];
+    if (!_looksLikeAd(px, minWidth, median)) kept.add(u);
+  }
+  if (kept.length == urls.length) return urls;
+  // 保护：至少留 2 张、且不能删过半（防止把整话都判成广告）
+  if (kept.length < 2 || kept.length * 2 <= urls.length) return urls;
+  return kept;
 }
 
 bool _looksLikeAd(ImagePixels? px, int minWidth, int median) {
   if (px == null) return false;
+  // 极小图：logo / 二维码 / 分隔条
+  if (px.width < 300 || px.height < 120) return true;
+  if (px.ratio <= 0.55) return true; // 又宽又短的横幅
+  // 又窄又长的整页推广图
   if (px.width != minWidth) return false;
   if (px.width >= median * 0.95) return false;
   return px.ratio >= 1.55;
+}
+
+/// 明显是推广的图片地址（命名里带 app / banner / 二维码 之类）。
+///
+/// 有些站的横幅尺寸和正文差不多，只能靠地址判断；这条只做「很确定」的过滤，
+/// 拿不准的一律保留。
+bool looksLikeAdUrl(String url) {
+  final u = url.toLowerCase();
+  if (u.contains('qrcode') || u.contains('qr_code') || u.contains('erweima')) {
+    return true;
+  }
+  if (u.contains('/banner') || u.contains('banner_') || u.contains('_banner')) {
+    return true;
+  }
+  if (u.contains('appdownload') ||
+      u.contains('app_download') ||
+      u.contains('/app/') ||
+      u.contains('download-app')) {
+    return true;
+  }
+  return false;
 }

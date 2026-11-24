@@ -1,4 +1,4 @@
-// 在线书籍服务：详情 / 目录 / 正文的获取与解析。
+﻿// 在线书籍服务：详情 / 目录 / 正文的获取与解析。
 //
 // 数据流（对应内置「笔趣阁家族」源）：
 //   搜索（HTTP，M2 已有）
@@ -536,7 +536,7 @@ class OnlineBookService {
     final seen = <String>{};
     final urls = [
       for (final url in out)
-        if (seen.add(url)) url,
+        if (seen.add(url) && !looksLikeAdUrl(url)) url,
     ];
     debugPrint(
       '[comic] static=${urls.length} first=${urls.take(3).join(' | ')}',

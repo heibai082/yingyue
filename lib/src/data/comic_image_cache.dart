@@ -1,4 +1,4 @@
-﻿// 漫画「这一话已经缓存过」= 图片真的在磁盘上，而不是只有图片地址。
+// 漫画「这一话已经缓存过」= 图片真的在磁盘上，而不是只有图片地址。
 //
 // 用户反馈：「缓存完了的章节不应该是秒开么，为什么还要转圈」。
 // 0.41 之前的「漫画缓存」只把「章节 → 图片 URL 清单」存下来：地址有了，
@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 
 import '../source/http_client.dart';
 import 'book_store.dart';
+import '../source/ad_page_filter.dart';
 import 'chapter_cache.dart';
 
 /// 图片地址 → 稳定的短 hash（同一话同一张图永远落到同一个文件）。
@@ -30,7 +31,10 @@ Directory comicChapterImageDir(BookStore store, String bookId, String href) =>
       '${store.chapterCacheDir(bookId).path}/img/${comicImageKey(href)}',
     );
 
-/// 缓存文件（按下载顺序命名，后缀跟原图一致）。
+/// 缓存文件：**按图片地址**命名（不是按第几张）。
+///
+/// 为什么不用序号：过滤广告 / 站点调整顺序后，序号会整体错位，缓存就会张冠李戴。
+/// 用地址 hash 后，同一张图永远是同一个文件，删几条广告也不影响别的图。
 File comicImageCacheFile(
   BookStore store,
   String bookId,
@@ -39,7 +43,7 @@ File comicImageCacheFile(
   String url,
 ) {
   final ext = _imageExt(url);
-  final name = index.toString().padLeft(3, '0');
+  final name = comicImageKey(url);
   return File('${comicChapterImageDir(store, bookId, href).path}/$name$ext');
 }
 
@@ -87,6 +91,7 @@ Future<int> cacheComicImages(
   }
   var ok = 0;
   for (var i = 0; i < urls.length; i++) {
+    if (looksLikeAdUrl(urls[i])) continue; // 广告横幅不下载、不占空间
     if (comicImageCached(store, bookId, href, i, urls[i])) {
       ok++;
       onProgress?.call(i + 1, urls.length);

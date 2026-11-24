@@ -17,6 +17,7 @@ import '../../data/models.dart';
 import '../../data/prefs.dart';
 import '../../source/analyze_url.dart';
 import '../../source/models.dart';
+import '../../source/ad_page_filter.dart';
 import '../../source/chapter_order.dart';
 import '../../source/comic_chapter_cache.dart';
 import '../../source/online_book_service.dart';
@@ -131,7 +132,14 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
     // 先把「看到第几话」记下来：哪怕这一话取不到图，退出再进来也该回到这儿
     widget.store.updateProgress(book.id, chapter: safe, offset: 0);
     // 这一话刚看过（或后台预取过）：直接出图，不再转圈
-    final cached = _chapterCache[href];
+    // 老缓存里可能还留着广告横幅（地址带 qrcode/banner/app 的），先剔掉
+    final rawCached = _chapterCache[href];
+    final cached = rawCached == null
+        ? null
+        : [
+            for (final u in rawCached)
+              if (!looksLikeAdUrl(u)) u,
+          ];
     setState(() {
       _chapterIndex = safe;
       _loading = cached == null;
@@ -144,7 +152,11 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
       return;
     }
     try {
-      final urls = await _service.fetchComicImages(widget.source, href);
+      final fetched = await _service.fetchComicImages(widget.source, href);
+      final urls = [
+        for (final u in fetched)
+          if (!looksLikeAdUrl(u)) u,
+      ];
       if (!mounted) return;
       _putCache(href, urls);
       setState(() {

@@ -72,7 +72,7 @@ void main() {
     List<String> urls(int n) => [for (var i = 1; i <= n; i++) 'u$i'];
 
     test('包子漫画 1180 话：正文 970 宽，第 2 张 800×1293 → 只删第 2 张', () {
-      final us = urls(18);
+      final us = _urls(18);
       final sizes = <String, ImagePixels>{
         for (var i = 0; i < 18; i++) us[i]: const ImagePixels(970, 1416),
       };
@@ -85,7 +85,7 @@ void main() {
     });
 
     test('包子漫画 1100 话：正文 850 宽 + 850×1441 的长页，只删 800×1356', () {
-      final us = urls(18);
+      final us = _urls(18);
       final sizes = <String, ImagePixels>{
         for (var i = 0; i < 18; i++) us[i]: const ImagePixels(850, 1241),
       };
@@ -98,7 +98,7 @@ void main() {
     });
 
     test('尺寸都一样时不删任何东西', () {
-      final us = urls(10);
+      final us = _urls(10);
       final sizes = <String, ImagePixels>{
         for (final u in us) u: const ImagePixels(970, 1416),
       };
@@ -106,12 +106,12 @@ void main() {
     });
 
     test('探测失败（尺寸缺失）就原样保留', () {
-      final us = urls(10);
+      final us = _urls(10);
       expect(dropAdPages(us, const {}), hasLength(10));
     });
 
     test('页数太少（<4）不折腾', () {
-      final us = urls(3);
+      final us = _urls(3);
       final sizes = <String, ImagePixels>{
         us[0]: const ImagePixels(970, 1416),
         us[1]: const ImagePixels(800, 1400),
@@ -120,4 +120,43 @@ void main() {
       expect(dropAdPages(us, sizes), hasLength(3));
     });
   });
+  test('又宽又短的横幅（安装 App + 二维码）要删掉', () {
+    final us = _urls(17);
+    final sizes = <String, ImagePixels>{
+      for (var i = 0; i < 17; i++) us[i]: const ImagePixels(970, 1416),
+    };
+    // 横幅：970 宽 × 180 高（贴在正文页之间）
+    sizes[us[2]] = const ImagePixels(970, 180);
+    sizes[us[9]] = const ImagePixels(970, 200);
+    final kept = dropAdPages(us, sizes);
+    expect(kept, hasLength(15));
+    expect(kept.contains(us[2]), isFalse);
+    expect(kept.contains(us[9]), isFalse);
+  });
+
+  test('彩页（宽一点、高宽比 0.75）不算广告', () {
+    final us = _urls(6);
+    final sizes = <String, ImagePixels>{
+      for (var i = 0; i < 6; i++) us[i]: const ImagePixels(970, 1416),
+    };
+    sizes[us[0]] = const ImagePixels(1600, 1200);
+    expect(dropAdPages(us, sizes), contains(us[0]));
+  });
+
+  test('就算全是横幅，也不能把整话删光', () {
+    final us = _urls(5);
+    final sizes = <String, ImagePixels>{
+      for (final u in us) u: const ImagePixels(970, 150),
+    };
+    expect(dropAdPages(us, sizes), hasLength(5), reason: '删过半就放弃过滤');
+  });
+
+  test('地址里带 qrcode / banner / app 的直接判定为广告', () {
+    expect(looksLikeAdUrl('https://i.x/qrcode-1.png'), isTrue);
+    expect(looksLikeAdUrl('https://i.x/banner/app.jpg'), isTrue);
+    expect(looksLikeAdUrl('https://i.x/appdownload.png'), isTrue);
+    expect(looksLikeAdUrl('https://i.x/970/1416/2024/01/abc.jpg'), isFalse);
+  });
 }
+
+List<String> _urls(int n) => [for (var i = 1; i <= n; i++) 'u$i'];

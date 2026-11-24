@@ -1,4 +1,4 @@
-// 缓存必须「存得住」：
+﻿// 缓存必须「存得住」：
 //   - 升级 / 系统清缓存目录后仍在（因为放在 files 目录，不在 cache 目录）；
 //   - 目录插了新章（漫画目录降序，序号整体后移）后，旧缓存还能对上；
 //   - 老版本（cache 目录 + ch_v2_序号）的缓存能搬到新位置。
@@ -134,15 +134,10 @@ void main() {
           .writeAsString('${book.chapters[i].title}\n这里是正文');
     }
 
-    // 写出 library.json，让新实例读得到这本书
-    final store0 = BookStore(dirsOverride: dirs);
-    await store0.load();
-    store0.addOnline(book);
-    await store0.flush();
-    store0.dispose();
-
     final store = BookStore(dirsOverride: dirs);
     await store.load();
+    store.addOnline(book);
+    // 迁移是 await 的：老版本留下的缓存搬完再断言
     await store.migrateLegacyCaches();
     expect(await store.cachedChapterCount('m'), 4);
     expect(await store.readCachedChapter(store.byId('m')!, 2), contains('正文'));
@@ -168,14 +163,9 @@ void main() {
       await File('${legacy.path}/ch_v2_${i.toString().padLeft(4, '0')}.txt')
           .writeAsString('完全无关的内容 $i');
     }
-    final store0 = BookStore(dirsOverride: dirs);
-    await store0.load();
-    store0.addOnline(book);
-    await store0.flush();
-    store0.dispose();
-
     final store = BookStore(dirsOverride: dirs);
     await store.load();
+    store.addOnline(book);
     await store.migrateLegacyCaches();
     expect(await store.cachedChapterCount('m'), 0);
     store.dispose();
@@ -210,14 +200,9 @@ void main() {
     await legacyImg.create(recursive: true);
     await File('${legacyImg.path}/000.jpg').writeAsBytes([1, 2, 3]);
 
-    final store0 = BookStore(dirsOverride: dirs);
-    await store0.load();
-    store0.addOnline(book);
-    await store0.flush();
-    store0.dispose();
-
     final store = BookStore(dirsOverride: dirs);
     await store.load();
+    store.addOnline(book);
     await store.migrateLegacyCaches();
 
     final after = store.byId('m')!;
@@ -226,6 +211,43 @@ void main() {
       ChapterCache.imageDirFor(dirs, after, 0).listSync(),
       isNotEmpty,
       reason: '图片目录已改名到新 hash',
+    );
+    store.dispose();
+  });
+  test('老漫画图片按「第几张」命名 → 迁移后按图片地址命名，仍算已缓存', () async {
+    final dirs = AppDirs(
+      files: '${tmp.path}/files',
+      cache: '${tmp.path}/cache',
+    );
+    final book = _manga(2);
+    final href = book.chapters[0].href!;
+    final legacy = Directory(
+      '${ChapterCache.legacyRoot(dirs).path}/${book.id}',
+    );
+    final chapterDir = Directory(
+      '${legacy.path}/img/h${ChapterCache.fnv64(href)}',
+    );
+    await chapterDir.create(recursive: true);
+    const imgUrl = 'https://img.example.com/p/1.jpg';
+    await File('${chapterDir.path}/000.jpg').writeAsBytes([1, 2, 3]);
+    await File('${legacy.path}/comic_list_cache.json')
+        .writeAsString('{"$href":["$imgUrl"]}');
+
+    final store = BookStore(dirsOverride: dirs);
+    await store.load();
+    store.addOnline(book);
+    await store.migrateLegacyCaches();
+
+    final after = store.byId('m')!;
+    expect(store.hasCachedChapter(after, 0), isTrue);
+    final newFile = File(
+      '${ChapterCache.imageDirFor(dirs, after, 0).path}/h${ChapterCache.fnv64(imgUrl)}.jpg',
+    );
+    expect(newFile.existsSync(), isTrue, reason: '迁移成按图片地址命名');
+    expect(
+      File('${ChapterCache.imageDirFor(dirs, after, 0).path}/000.jpg')
+          .existsSync(),
+      isFalse,
     );
     store.dispose();
   });

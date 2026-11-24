@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -155,7 +155,14 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
   ///     章节链接命名，直接整个目录改名，零风险；
   ///   - 小说：用「章节标题出现在缓存正文里」来核对序号位移（漫画源会往最前面
   ///     插新话，老序号要整体 +k），对得上才搬；对不上就留在原地不用。
-  Future<void> migrateLegacyCaches() async {
+  Future<void>? _migration;
+
+  Future<void> migrateLegacyCaches() {
+    // 只跑一次；后来者等同一份 future（load() 里是后台触发，测试里可以 await）
+    return _migration ??= _migrateAll();
+  }
+
+  Future<void> _migrateAll() async {
     if (_disposed) return;
     final dirs = _dirsOrTemp;
     final legacyRoot = ChapterCache.legacyRoot(dirs);
@@ -194,6 +201,8 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
       await legacy.rename(target.path);
       // 0.42~0.43 的图片目录名是 32 位 hash，改成新的 64 位（否则「已缓存」会算 0）
       await _renameLegacyImageDirs(book, target);
+      // 老图片按「第几张」命名，现在按图片地址命名：用缓存下来的图片清单改回来
+      await _rekeyImageFiles(book, target);
       return true;
     }
 
@@ -259,6 +268,57 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
         await from.rename(to.path);
       } catch (_) {}
     }
+  }
+
+  /// 老漫画图片是按序号命名的（000.jpg / 001.jpg…），现在按图片地址。
+  ///
+  /// 缓存目录里存着 `comic_list_cache.json`（章节链接 → 图片地址清单），
+  /// 照它把 `000.jpg` 改名成 `<图片hash>.jpg`，这样「已缓存」和秒开都不用重下。
+  Future<void> _rekeyImageFiles(Book book, Directory bookDir) async {
+    final listFile = File('${bookDir.path}/comic_list_cache.json');
+    try {
+      if (!await listFile.exists()) return;
+      final decoded = jsonDecode(await listFile.readAsString());
+      if (decoded is! Map) return;
+      final imgRoot = Directory('${bookDir.path}/img');
+      if (!await imgRoot.exists()) return;
+      for (final entry in decoded.entries) {
+        final href = entry.key.toString();
+        final urls = entry.value;
+        if (href.isEmpty || urls is! List) continue;
+        final chapterDir = Directory(
+          '${imgRoot.path}/h${ChapterCache.fnv64(href)}',
+        );
+        if (!await chapterDir.exists()) continue;
+        for (var i = 0; i < urls.length; i++) {
+          final url = urls[i];
+          if (url is! String || url.isEmpty) continue;
+          // 逐个找旧文件（后缀可能是 jpg/webp/png）
+          for (final ext in const [
+            'jpg',
+            'jpeg',
+            'png',
+            'webp',
+            'gif',
+            'avif',
+          ]) {
+            final from = File(
+              '${chapterDir.path}/${i.toString().padLeft(3, '0')}.$ext',
+            );
+            if (!await from.exists()) continue;
+            final to = File(
+              '${chapterDir.path}/h${ChapterCache.fnv64(url)}'
+              '.${ext == 'jpeg' ? 'jpg' : ext}',
+            );
+            if (await to.exists()) continue;
+            try {
+              await from.rename(to.path);
+            } catch (_) {}
+            break;
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   /// 猜「旧文件序号 → 现在序号」的位移；猜不出返回 null。

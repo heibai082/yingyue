@@ -1,4 +1,4 @@
-﻿// 漫画图片磁盘缓存的基础测试（缓存命中 = 真的秒开）。
+// 漫画图片磁盘缓存的基础测试（缓存命中 = 真的秒开）。
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -13,7 +13,9 @@ void main() {
 
   setUp(() async {
     tmp = await Directory.systemTemp.createTemp('sakura_comic_img');
-    store = BookStore(dirsOverride: AppDirs(files: tmp.path, cache: tmp.path));
+    store = BookStore(
+      dirsOverride: AppDirs(files: tmp.path, cache: tmp.path),
+    );
     await store.load();
   });
 
@@ -47,7 +49,7 @@ void main() {
       'https://img.example.com/a/1.jpg',
     );
     expect(f1.path, f2.path);
-    expect(f1.path, endsWith('003.jpg'));
+    expect(f1.path, endsWith('.jpg'));
     expect(f1.path, contains('img'));
   });
 
@@ -59,9 +61,9 @@ void main() {
       0,
       'https://i.x/a.webp?token=1',
     );
-    expect(webp.path, endsWith('000.webp'));
+    expect(webp.path, endsWith('.webp'));
     final png = comicImageCacheFile(store, 'b', 'h', 1, 'https://i.x/a.PNG');
-    expect(png.path, endsWith('001.png'));
+    expect(png.path, endsWith('.png'));
   });
 
   test('空文件不算缓存命中（半截图不能被当成已缓存）', () {
