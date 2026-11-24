@@ -1,4 +1,4 @@
-// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
+﻿// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
 //
 // 设计取舍：
 //   - 不做分页手势（左右滑），先做「一条长图往下滚」，和站点本身一致，
@@ -8,6 +8,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../data/book_store.dart';
 import '../../data/models.dart';
@@ -47,6 +48,10 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
   bool _loading = true;
   String? _error;
 
+  /// 顶栏 / 底栏是否露出。横屏默认收起，点画面中间切换（沉浸式看漫画）。
+  bool _chrome = true;
+  bool? _wasLandscape;
+
   Book? get _book => widget.store.byId(widget.bookId);
 
   @override
@@ -59,9 +64,23 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
 
   @override
   void dispose() {
+    // 退出阅读页时把系统栏放回来，别把沉浸式带到书架
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _scroll.dispose();
     _service.dispose();
     super.dispose();
+  }
+
+  void _setImmersive(bool hide) {
+    SystemChrome.setEnabledSystemUIMode(
+      hide ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
+    );
+  }
+
+  void _toggleChrome() {
+    setState(() => _chrome = !_chrome);
+    // 横屏时连系统状态栏一起收，才算真全屏
+    _setImmersive(!_chrome && _wasLandscape == true);
   }
 
   Future<void> _load(int index) async {
@@ -163,45 +182,117 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
     final chapter = book.chapters.isEmpty
         ? null
         : book.chapters[_chapterIndex.clamp(0, book.chapters.length - 1)];
+
+    final landscape =
+        MediaQuery.of(context).orientation == Orientation.landscape;
+    if (_wasLandscape != landscape) {
+      _wasLandscape = landscape;
+      // 横屏默认收起顶栏/底栏 + 隐藏系统栏：画面铺满整屏，不留黑边
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() => _chrome = !landscape);
+        _setImmersive(landscape);
+      });
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black.withValues(alpha: .85),
-        foregroundColor: Colors.white,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              book.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 15),
+      // 顶栏 / 底栏不再占布局空间，改成浮在画面上的叠加层：
+      // 这样图片能顶到屏幕边缘，点画面中间可以随时收起/唤出
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _toggleChrome,
+              child: _buildBody(),
             ),
-            if (chapter != null)
-              Text(
-                chapter.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.white.withValues(alpha: .7),
-                ),
-              ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            tooltip: '目录',
-            onPressed: _openToc,
-            icon: const Icon(Icons.list_rounded),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            child: _overlay(visible: _chrome, child: _topBar(book, chapter)),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _overlay(visible: _chrome, child: _bottomBar(book)),
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(child: _buildBody()),
-          _bottomBar(book),
-        ],
+    );
+  }
+
+  /// 叠加层：隐藏时不接手势，避免挡住「点一下切换」。
+  Widget _overlay({required bool visible, required Widget child}) {
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 160),
+        child: child,
+      ),
+    );
+  }
+
+  Widget _topBar(Book book, ChapterRef? chapter) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.black.withValues(alpha: .78),
+            Colors.black.withValues(alpha: .0),
+          ],
+        ),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 6, 4, 14),
+          child: Row(
+            children: [
+              IconButton(
+                tooltip: '返回',
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: const Icon(Icons.arrow_back_rounded),
+                color: Colors.white,
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      book.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 15, color: Colors.white),
+                    ),
+                    if (chapter != null)
+                      Text(
+                        chapter.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.white.withValues(alpha: .7),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: '目录',
+                onPressed: _openToc,
+                icon: const Icon(Icons.list_rounded),
+                color: Colors.white,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
