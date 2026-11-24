@@ -57,6 +57,9 @@ class ReaderPage extends StatefulWidget {
 
 class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   BookContent? _content;
+
+  /// 正在后台预取的章节，避免重复抓同一章。
+  final Set<int> _warmInFlight = {};
   String _chapterText = '';
   List<PageSlice> _pages = [];
   int _chapterIndex = 0;
@@ -373,6 +376,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         unawaited(_preloadChapter(_chapterIndex - 1));
       }
       // 后台把全书人名扫一遍（只做一次；结果用于正文高亮与「人物」面板）
+      // 默认往后缓存两章：换下一章基本秒开（滚动 / 翻页模式都做）
+      _warmChaptersAhead();
       if (_xray == null && !_xrayLoading && _xrayError == null) {
         unawaited(_ensureXray());
       }
@@ -386,9 +391,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           final chapter = _chapterIndex;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('这一章是图片，已切到漫画模式')),
-            );
+            ScaffoldMessenger.of(context)
+                .showSnackBar(const SnackBar(content: Text('这一章是图片，已切到漫画模式')));
             Navigator.of(context).pushReplacement(
               MaterialPageRoute(
                 builder: (_) => ComicReaderPage(
@@ -888,6 +892,33 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   /// 静默预加载相邻章节（文本 + 分页结果），
   /// 这样翻到章尾继续滑动时可以“秒进”下一章，不再出现“顿一下”的等待。
+  /// 后台把后面两章正文抓下来存进缓存（设置里可关）。
+  void _warmChaptersAhead() {
+    if (!widget.prefs.autoPrefetchChapters) return;
+    final book = _book;
+    if (book == null) return;
+    for (var d = 1; d <= 2; d++) {
+      final i = _chapterIndex + d;
+      if (i < 0 || i >= book.chapterCount) continue;
+      unawaited(_warmOne(i));
+    }
+  }
+
+  Future<void> _warmOne(int index) async {
+    if (_rawTextCache[index] != null) return;
+    if (!_warmInFlight.add(index)) return;
+    try {
+      final book = _book;
+      if (book == null) return;
+      _content ??= createBookContent(book, widget.store);
+      await _content!.chapterText(index);
+    } catch (_) {
+      // 预取失败无所谓，真要读的时候会再抓一次
+    } finally {
+      _warmInFlight.remove(index);
+    }
+  }
+
   Future<void> _preloadChapter(int index) async {
     final book = _book;
     if (book == null || index < 0 || index >= book.chapterCount) return;

@@ -803,9 +803,8 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 刻意**不弹阻塞对话框**：后台跑，进度看通知栏，用户可以继续看书 / 翻设置。
   Future<void> _syncSourcesNow(BuildContext context) async {
     if (_sourceSyncRunning) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('同步已经在跑了，通知栏有进度')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('同步已经在跑了，通知栏有进度')));
       return;
     }
     setState(() => _sourceSyncRunning = true);
@@ -897,7 +896,8 @@ class _SettingsPageState extends State<SettingsPage> {
               minLines: 3,
               maxLines: 6,
               decoration: const InputDecoration(
-                hintText: 'https://www.yckceo.com/yuedu/shuyuan/index.html\n'
+                hintText:
+                    'https://www.yckceo.com/yuedu/shuyuan/index.html\n'
                     'https://another-site.com/yuedu/shuyuans/index.html',
                 border: OutlineInputBorder(),
                 isDense: true,
@@ -931,20 +931,21 @@ class _SettingsPageState extends State<SettingsPage> {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('这个网址看不懂：${bad.first}\n示例：https://www.yckceo.com/yuedu/shuyuan/index.html'),
+          content: Text(
+            '这个网址看不懂：${bad.first}\n示例：https://www.yckceo.com/yuedu/shuyuan/index.html',
+          ),
         ),
       );
       return;
     }
     widget.prefs.setSourceHubUrls(lines.join('\n'));
     if (!context.mounted) return;
-    final count = HubTarget.parseAll(lines.join('\n'), fallbackToDefault: false).length;
+    final count = HubTarget.parseAll(
+      lines.join('\n'),
+      fallbackToDefault: false,
+    ).length;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          lines.isEmpty ? '已恢复默认源仓库' : '已保存 $count 个源仓库',
-        ),
-      ),
+      SnackBar(content: Text(lines.isEmpty ? '已恢复默认源仓库' : '已保存 $count 个源仓库')),
     );
   }
 
@@ -984,10 +985,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.link_rounded),
-                  title: const Text(
-                    '源仓库地址',
-                    style: TextStyle(fontSize: 14),
-                  ),
+                  title: const Text('源仓库地址', style: TextStyle(fontSize: 14)),
                   subtitle: Text(
                     _hubLabel(
                       widget.prefs.sourceHubUrls.trim().isEmpty
@@ -1003,10 +1001,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   contentPadding: EdgeInsets.zero,
                   value: widget.prefs.autoSyncSources,
                   onChanged: (v) => widget.prefs.setAutoSyncSources(v),
-                  title: const Text(
-                    '每天自动同步书源',
-                    style: TextStyle(fontSize: 14),
-                  ),
+                  title: const Text('每天自动同步书源', style: TextStyle(fontSize: 14)),
                   subtitle: Text(
                     widget.prefs.lastSourceSyncDay.isEmpty
                         ? '每天首次打开：拉 24 小时内的新书源 → 体检（连续失败 2 次自动删，后台跑不挡看书）'
@@ -1069,10 +1064,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.bug_report_outlined),
-                  title: const Text(
-                    '漫画取图调试',
-                    style: TextStyle(fontSize: 14),
-                  ),
+                  title: const Text('漫画取图调试', style: TextStyle(fontSize: 14)),
                   subtitle: const Text(
                     '给一个漫画章节地址，看能不能取到图（排查 JS 源用）',
                     style: TextStyle(fontSize: 12),
@@ -1136,6 +1128,17 @@ class _SettingsPageState extends State<SettingsPage> {
           const SectionTitle(
             icon: Icons.cleaning_services_rounded,
             title: '存储',
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: widget.prefs.autoPrefetchChapters,
+            onChanged: widget.prefs.setAutoPrefetchChapters,
+            secondary: const Icon(Icons.download_for_offline_rounded),
+            title: const Text('自动缓存后两章', style: TextStyle(fontSize: 14)),
+            subtitle: const Text(
+              '读到第几章，就顺手把后面两章抓下来：换下一章基本秒开；关掉可省流量',
+              style: TextStyle(fontSize: 12),
+            ),
           ),
           ListTile(
             contentPadding: EdgeInsets.zero,

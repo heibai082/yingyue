@@ -95,6 +95,9 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   /// 实时模糊要每帧采样一次背景，低端机会掉帧，所以做成开关（默认关）。
   bool frostedGlass = false;
 
+  /// 读一章自动往后缓存两章（漫画预取图片列表，小说直接缓存正文）。
+  bool autoPrefetchChapters = true;
+
   /// 正文区距屏幕顶部的留白（上边距）。
   ///
   /// 用户反馈：希望能自己定「正文离顶部多远」（原先是写死的 30）。
@@ -389,6 +392,7 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           ttsVoiceSid = (data['ttsVoiceSid'] as num?)?.toInt() ?? 0;
           ttsRolePlay = data['ttsRolePlay'] as bool? ?? false;
           frostedGlass = data['frostedGlass'] as bool? ?? false;
+    autoPrefetchChapters = data['autoPrefetchChapters'] as bool? ?? true;
           webdavUrl = data['webdavUrl'] as String? ?? '';
           webdavUser = data['webdavUser'] as String? ?? '';
           webdavPass = data['webdavPass'] as String? ?? '';
@@ -579,6 +583,13 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   void setTtsRolePlay(bool v) {
     if (ttsRolePlay == v) return;
     ttsRolePlay = v;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setAutoPrefetchChapters(bool v) {
+    if (autoPrefetchChapters == v) return;
+    autoPrefetchChapters = v;
     _saveSoon();
     notifyListeners();
   }
@@ -997,6 +1008,7 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
         'ttsVoiceSid': ttsVoiceSid,
         'ttsRolePlay': ttsRolePlay,
         'frostedGlass': frostedGlass,
+    'autoPrefetchChapters': autoPrefetchChapters,
         'webdavUrl': webdavUrl,
         'webdavUser': webdavUser,
         'webdavDir': webdavDir,

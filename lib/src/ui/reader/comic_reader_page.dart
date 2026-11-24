@@ -1,4 +1,4 @@
-// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
+﻿// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
 //
 // 设计取舍：
 //   - 不做分页手势（左右滑），先做「一条长图往下滚」，和站点本身一致，
@@ -6,6 +6,7 @@
 //   - 图片用 Image.network 的内存缓存，换话时清掉旧误差；
 //   - 进度只记「第几话」（Book.chapterIndex），符合漫画的阅读习惯。
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -53,11 +54,35 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
   bool _chrome = true;
   bool? _wasLandscape;
 
-  /// 章节地址 → 图片列表（App 生命周期内复用，翻回来 / 预取过的直接出图）。
-  static final ComicChapterCache _chapterCache = ComicChapterCache();
+  /// 每本书一份「章节地址 → 图片列表」缓存：翻回来 / 预取过的直接出图，
+  /// 并且会落到这本书的缓存目录，下次打开 App 也算预取过。
+  static final Map<String, ComicChapterCache> _caches = {};
+  static final Set<String> _loadedBooks = {};
 
   /// 正在预取的章节，避免重复请求。
   static final Set<String> _prefetching = {};
+
+  Timer? _cacheSaveTimer;
+
+  ComicChapterCache get _chapterCache =>
+      _caches.putIfAbsent(widget.bookId, ComicChapterCache.new);
+
+  File get _cacheFile => File(
+    '${widget.store.chapterCacheDir(widget.bookId).path}/comic_list_cache.json',
+  );
+
+  Future<void> _ensureCacheLoaded() async {
+    if (!_loadedBooks.add(widget.bookId)) return;
+    await _chapterCache.loadFrom(_cacheFile);
+    if (mounted) setState(() {});
+  }
+
+  void _scheduleCacheSave() {
+    _cacheSaveTimer?.cancel();
+    _cacheSaveTimer = Timer(const Duration(seconds: 2), () {
+      unawaited(_chapterCache.saveTo(_cacheFile));
+    });
+  }
 
   Book? get _book => widget.store.byId(widget.bookId);
 
@@ -66,6 +91,7 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
     super.initState();
     final book = _book;
     _chapterIndex = widget.initialChapter ?? book?.safeChapterIndex ?? 0;
+    unawaited(_ensureCacheLoaded());
     unawaited(_load(_chapterIndex));
   }
 
@@ -73,6 +99,8 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
   void dispose() {
     // 退出阅读页时把系统栏放回来，别把沉浸式带到书架
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    _cacheSaveTimer?.cancel();
+    unawaited(_chapterCache.saveTo(_cacheFile));
     _scroll.dispose();
     _service.dispose();
     super.dispose();
@@ -98,6 +126,8 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
       book.chapters[safe].href ?? '',
       widget.source.bookSourceUrl,
     );
+    // 先把「看到第几话」记下来：哪怕这一话取不到图，退出再进来也该回到这儿
+    widget.store.updateProgress(book.id, chapter: safe, offset: 0);
     // 这一话刚看过（或后台预取过）：直接出图，不再转圈
     final cached = _chapterCache[href];
     setState(() {
@@ -114,7 +144,7 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
     try {
       final urls = await _service.fetchComicImages(widget.source, href);
       if (!mounted) return;
-      _chapterCache.put(href, urls);
+      _putCache(href, urls);
       setState(() {
         _images = urls;
         _loading = false;
@@ -143,7 +173,12 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
     widget.store.updateProgress(book.id, chapter: index, offset: 0);
     _warmFirstPages(urls);
     unawaited(_stripAdsInBackground(href, urls));
-    unawaited(_prefetch(index + 1));
+    // 默认往后缓存两章：看完这一话点「下一话」基本秒开
+    if (widget.prefs.autoPrefetchChapters) {
+      for (var d = 1; d <= 2; d++) {
+        unawaited(_prefetch(index + d));
+      }
+    }
   }
 
   /// 先把前 3 页拉进 Flutter 的图片缓存，滚下去时就不用一张张转圈。
@@ -165,10 +200,15 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
       return;
     }
     if (!mounted || kept.length == urls.length) return;
-    _chapterCache.put(href, kept);
+    _putCache(href, kept);
     // 用户已经翻到别的话了就别动当前画面
     if (_images.length != urls.length) return;
     setState(() => _images = kept);
+  }
+
+  void _putCache(String href, List<String> urls) {
+    _chapterCache.put(href, urls);
+    _scheduleCacheSave();
   }
 
   /// 后台把下一话的图片列表取好，点「下一话」就是秒开。
@@ -182,7 +222,7 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
     if (_chapterCache.contains(href) || !_prefetching.add(href)) return;
     try {
       final urls = await _service.fetchComicImages(widget.source, href);
-      _chapterCache.put(href, urls);
+      _putCache(href, urls);
     } catch (_) {
       // 预取失败无所谓，点进去时会再试
     } finally {
