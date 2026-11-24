@@ -73,8 +73,18 @@ String renderUrlTemplate(String template, Map<String, dynamic> vars) {
 /// - 已是 `http(s)://` → 原样返回；
 /// - 以 `/` 开头或相对路径 → 以 [baseUrl] 为基准解析。
 String resolveUrl(String url, String baseUrl) {
-  final u = url.trim();
+  var u = url.trim();
   if (u.isEmpty) return u;
+  // HTML 里的链接常带实体：`a.html?id=1&amp;page=2`。
+  // 不还原的话，参数名会变成「amp;page」，站点拿不到参数（漫画章节取图就是栽在这上面）。
+  if (u.contains('&amp;') || u.contains('&#')) {
+    u = u
+        .replaceAll('&amp;', '&')
+        .replaceAll('&#38;', '&')
+        .replaceAll('&#x26;', '&')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'");
+  }
   if (u.startsWith('http://') || u.startsWith('https://')) return u;
   try {
     if (baseUrl.isEmpty) return u;

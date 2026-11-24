@@ -428,8 +428,10 @@ class OnlineBookService {
     final headers = headerMap(source);
     // 不少站点对「没有来路的请求」直接 403；补上站内 Referer
     headers.putIfAbsent('Referer', () => source.bookSourceUrl);
+    // 老数据里可能存着 `&amp;` 这种实体（以前目录没还原），这里统一洗一遍
+    final target = resolveUrl(url, source.bookSourceUrl);
     final resp = await _client.get(
-      url,
+      target,
       headers: headers,
       timeout: _httpTimeout,
       retries: 1,
@@ -441,18 +443,26 @@ class OnlineBookService {
   }
 
   /// 书源 header（JSON 字符串）→ 请求头。
+  ///
+  /// 有些源写成 `@js: JSON.stringify({...})`：这里不执行 JS，但会把外层壳剥掉，
+  /// 里面的 JSON 对象照样能用（包子漫画这类图片源就是这种写法）。
   static Map<String, String> headerMap(BookSource source) {
     final out = <String, String>{};
     final raw = source.header;
-    if (raw != null && raw.trim().isNotEmpty) {
-      try {
-        final decoded = jsonDecode(raw);
-        if (decoded is Map) {
-          decoded.forEach((k, v) => out[k.toString()] = v.toString());
-        }
-      } catch (_) {
-        // 忽略非 JSON 的 header
+    if (raw == null || raw.trim().isEmpty) return out;
+    var text = raw.trim();
+    if (text.startsWith('@js:') || text.startsWith('<js>')) {
+      final start = text.indexOf('{');
+      final end = text.lastIndexOf('}');
+      if (start >= 0 && end > start) text = text.substring(start, end + 1);
+    }
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is Map) {
+        decoded.forEach((k, v) => out[k.toString()] = v.toString());
       }
+    } catch (_) {
+      // 忽略非 JSON 的 header
     }
     return out;
   }

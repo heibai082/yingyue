@@ -1,4 +1,4 @@
-// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
+﻿// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
 //
 // 设计取舍：
 //   - 不做分页手势（左右滑），先做「一条长图往下滚」，和站点本身一致，
@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import '../../data/book_store.dart';
 import '../../data/models.dart';
 import '../../data/prefs.dart';
+import '../../source/analyze_url.dart';
 import '../../source/models.dart';
 import '../../source/online_book_service.dart';
 
@@ -71,15 +72,19 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
     });
     if (_scroll.hasClients) _scroll.jumpTo(0);
     try {
-      final urls = await _service.fetchComicImages(
-        widget.source,
+      final href = resolveUrl(
         book.chapters[safe].href ?? '',
+        widget.source.bookSourceUrl,
       );
+      final urls = await _service.fetchComicImages(widget.source, href);
       if (!mounted) return;
       setState(() {
         _images = urls;
         _loading = false;
-        if (urls.isEmpty) _error = '这一话没取到图片：书源的正文规则可能只适用文字章节';
+        if (urls.isEmpty) {
+          _error = '这一话没取到图片（章节地址：$href）\n'
+              '可能是书源正文规则只适用文字章节，或者站点需要特殊请求头';
+        }
       });
       if (urls.isNotEmpty) {
         widget.store.updateProgress(book.id, chapter: safe, offset: 0);
