@@ -549,9 +549,12 @@ class OnlineBookService {
       }
     }
     debugPrint('[comic] total=${urls.length}');
-    final kept = filterChapterImages(urls, chapterUrl);
-    return await _dropAdPages(kept);
+    return filterChapterImages(urls, chapterUrl);
   }
+
+  /// 广告页过滤要逐张探测尺寸（18 张图大约 4~6 秒），所以**不要**卡在打开章节的路上：
+  /// 调用方先渲染，再在后台调这个方法，有删减就刷新一次列表。
+  Future<List<String>> removeAdPages(List<String> urls) => _dropAdPages(urls);
 
   static final ImageProbe _probe = ImageProbe();
 

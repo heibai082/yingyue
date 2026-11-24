@@ -1,4 +1,4 @@
-﻿// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
+// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
 //
 // 设计取舍：
 //   - 不做分页手势（左右滑），先做「一条长图往下滚」，和站点本身一致，
@@ -15,6 +15,7 @@ import '../../data/models.dart';
 import '../../data/prefs.dart';
 import '../../source/analyze_url.dart';
 import '../../source/models.dart';
+import '../../source/comic_chapter_cache.dart';
 import '../../source/online_book_service.dart';
 
 class ComicReaderPage extends StatefulWidget {
@@ -52,6 +53,12 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
   bool _chrome = true;
   bool? _wasLandscape;
 
+  /// 章节地址 → 图片列表（App 生命周期内复用，翻回来 / 预取过的直接出图）。
+  static final ComicChapterCache _chapterCache = ComicChapterCache();
+
+  /// 正在预取的章节，避免重复请求。
+  static final Set<String> _prefetching = {};
+
   Book? get _book => widget.store.byId(widget.bookId);
 
   @override
@@ -87,20 +94,27 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
     final book = _book;
     if (book == null || book.chapters.isEmpty) return;
     final safe = index.clamp(0, book.chapters.length - 1);
+    final href = resolveUrl(
+      book.chapters[safe].href ?? '',
+      widget.source.bookSourceUrl,
+    );
+    // 这一话刚看过（或后台预取过）：直接出图，不再转圈
+    final cached = _chapterCache[href];
     setState(() {
       _chapterIndex = safe;
-      _loading = true;
+      _loading = cached == null;
       _error = null;
-      _images = const [];
+      _images = cached ?? const [];
     });
     if (_scroll.hasClients) _scroll.jumpTo(0);
+    if (cached != null) {
+      _afterLoaded(book, safe, href, cached);
+      return;
+    }
     try {
-      final href = resolveUrl(
-        book.chapters[safe].href ?? '',
-        widget.source.bookSourceUrl,
-      );
       final urls = await _service.fetchComicImages(widget.source, href);
       if (!mounted) return;
+      _chapterCache.put(href, urls);
       setState(() {
         _images = urls;
         _loading = false;
@@ -111,15 +125,67 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
               '（章节地址：$href）';
         }
       });
-      if (urls.isNotEmpty) {
-        widget.store.updateProgress(book.id, chapter: safe, offset: 0);
-      }
+      if (urls.isNotEmpty) _afterLoaded(book, safe, href, urls);
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _loading = false;
         _error = '加载失败：$e';
       });
+    }
+  }
+
+  /// 出图之后的后台活儿：预热前几页、去掉广告页、把下一话预备好。
+  ///
+  /// 都不挡当前这一话的显示 —— 这是「打开不转圈」的关键。
+  void _afterLoaded(Book book, int index, String href, List<String> urls) {
+    widget.store.updateProgress(book.id, chapter: index, offset: 0);
+    _warmFirstPages(urls);
+    unawaited(_stripAdsInBackground(href, urls));
+    unawaited(_prefetch(index + 1));
+  }
+
+  /// 先把前 3 页拉进 Flutter 的图片缓存，滚下去时就不用一张张转圈。
+  void _warmFirstPages(List<String> urls) {
+    for (final u in urls.take(3)) {
+      unawaited(
+        precacheImage(NetworkImage(u), context).catchError((Object _) {}),
+      );
+    }
+  }
+
+  /// 广告页探测比较慢（要读每张图尺寸），放后台；有删减再刷新列表。
+  Future<void> _stripAdsInBackground(String href, List<String> urls) async {
+    if (urls.length < 4) return;
+    List<String> kept;
+    try {
+      kept = await _service.removeAdPages(urls);
+    } catch (_) {
+      return;
+    }
+    if (!mounted || kept.length == urls.length) return;
+    _chapterCache.put(href, kept);
+    // 用户已经翻到别的话了就别动当前画面
+    if (_images.length != urls.length) return;
+    setState(() => _images = kept);
+  }
+
+  /// 后台把下一话的图片列表取好，点「下一话」就是秒开。
+  Future<void> _prefetch(int index) async {
+    final book = _book;
+    if (book == null || index < 0 || index >= book.chapters.length) return;
+    final href = resolveUrl(
+      book.chapters[index].href ?? '',
+      widget.source.bookSourceUrl,
+    );
+    if (_chapterCache.contains(href) || !_prefetching.add(href)) return;
+    try {
+      final urls = await _service.fetchComicImages(widget.source, href);
+      _chapterCache.put(href, urls);
+    } catch (_) {
+      // 预取失败无所谓，点进去时会再试
+    } finally {
+      _prefetching.remove(href);
     }
   }
 
