@@ -1,4 +1,4 @@
-﻿// 书源数据模型：与「阅读 3.0（Legado）」书源 JSON 格式兼容。
+// 书源数据模型：与「阅读 3.0（Legado）」书源 JSON 格式兼容。
 //
 // - 字段命名与 Legado 完全一致（bookSourceUrl / ruleSearch / …）；
 // - 解析容错：空值、类型混用、未知字段都不抛异常；
@@ -460,10 +460,29 @@ class BookSource {
   final ContentRule? contentRule;
 
   /// 图片（漫画）源：阅读 3.0 里 bookSourceType == 2。
-  bool get isComic => bookSourceType == 2;
+  ///
+  /// 有些源导进来 type 是 0（作者没填），但分组 / 名字里写着「漫画」，
+  /// 这种情况也按漫画源算——不然换源时会把漫画源当小说源去搜，搜出一堆同人。
+  bool get isComic {
+    if (bookSourceType == 2) return true;
+    if (bookSourceType != 0) return false;
+    final hint = '${bookSourceGroup ?? ''} ${bookSourceName}'.toLowerCase();
+    return hint.contains('漫画') ||
+        hint.contains('漫畫') ||
+        hint.contains('comic') ||
+        hint.contains('manga');
+  }
 
   /// 音频源：bookSourceType == 1（本 App 暂不支持播放）。
-  bool get isAudio => bookSourceType == 1;
+  bool get isAudio {
+    if (bookSourceType == 1) return true;
+    if (bookSourceType != 0) return false;
+    final hint = '${bookSourceGroup ?? ''} ${bookSourceName}';
+    return hint.contains('有声') || hint.contains('听书') || hint.contains('音频');
+  }
+
+  /// 文本源（既不是漫画也不是音频）。
+  bool get isText => !isComic && !isAudio;
 
   /// 未识别的顶层字段（导出时原样写回，保证向前兼容）。
   final Map<String, dynamic> extra;

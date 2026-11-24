@@ -48,6 +48,14 @@ class _Candidate {
   String get url => (book.bookUrl ?? '').trim();
 }
 
+/// 换源时搜哪一类源。
+enum _KindFilter {
+  /// 跟着本书现在用的源走（漫画书只搜漫画源）。
+  auto,
+  comic,
+  text,
+}
+
 class _SourceSwitchSheet extends StatefulWidget {
   const _SourceSwitchSheet({
     required this.bookStore,
@@ -80,7 +88,21 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
   DateTime? _startedAt;
   Timer? _ticker;
 
+  /// 搜哪一类源：漫画书默认只搜漫画源，避免搜出一堆同名同人文。
+  _KindFilter _kind = _KindFilter.auto;
+
   String get _cacheKey => '${widget.book.title}|${widget.book.author}';
+
+  /// 这本书现在用的源是不是漫画源。
+  bool get _bookIsComic =>
+      widget.sourceStore.byUrl(widget.book.sourceUrl ?? '')?.isComic ?? false;
+
+  /// 这一轮要搜漫画源还是小说源。
+  bool get _wantComic => switch (_kind) {
+    _KindFilter.comic => true,
+    _KindFilter.text => false,
+    _KindFilter.auto => _bookIsComic,
+  };
 
   @override
   void initState() {
@@ -99,6 +121,12 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
   }
 
   Future<void> _search({bool force = false}) async {
+    // 这一轮要搜的源：漫画书只搜漫画源，避免搜出一堆同名同人文
+    final wantComic = _wantComic;
+    final pool = widget.sourceStore.enabled
+        .where((s) => wantComic ? s.isComic : s.isText)
+        .toList();
+
     // 没点「刷新」就先用上次的结果，避免每次打开都重新联网搜一遍
     if (!force) {
       await SourceCacheStore.instance.ensureLoaded();
@@ -109,6 +137,7 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
         for (final cc in cached) {
           final src = widget.sourceStore.byUrl(cc.sourceUrl);
           if (src == null) continue;
+          if (src.isComic != wantComic) continue; // 只留同一类的缓存
           list.add(
             _Candidate(
               src,
@@ -129,6 +158,8 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
             _searching = false;
             _fromCache = true;
             _candidates = list;
+            _total = pool.length;
+            _found = list.length;
           });
           return;
         }
@@ -142,7 +173,7 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
         _searched = 0;
         _found = 0;
         _stopped = false;
-        _total = widget.sourceStore.enabled.length;
+        _total = pool.length;
         _startedAt = DateTime.now();
       });
     }
@@ -151,17 +182,21 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && _searching) setState(() {});
     });
+    SourceStore? scoped;
     try {
-      final enabled = widget.sourceStore.enabled;
-      if (enabled.isEmpty) {
+      if (pool.isEmpty) {
+        if (!mounted) return;
         setState(() {
           _searching = false;
-          _error = '还没有启用的书源';
+          _error = wantComic
+              ? '没有启用的漫画源：先导入/启用一个「类型：图片」的书源'
+              : '没有启用的小说源';
         });
         return;
       }
+      scoped = SourceStore(initial: pool);
       final repo = _repo = OnlineRepo(
-        store: widget.sourceStore,
+        store: scoped,
         perSourceTimeout: const Duration(seconds: 10),
       );
       final seen = <String>{};
@@ -215,7 +250,7 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
         _fromCache = false;
         if (_candidates.isEmpty) {
           _error = _stopped
-              ? '搜了 $_searched 个源没找到可换的来源，稍后点右上角 ⟳ 再试'
+              ? '搜了 $_searched 个${wantComic ? '漫画' : ''}源没找到可换的来源，稍后点右上角 ⟳ 再试'
               : '没有找到可用的换源结果';
         }
       });
@@ -239,6 +274,8 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
         _searching = false;
         _error = '$e';
       });
+    } finally {
+      scoped?.dispose();
     }
   }
 
@@ -412,6 +449,38 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
                 ],
               ),
             ),
+            // 源类型：漫画书默认只搜漫画源，别把同名同人文搜出来
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 12, 6),
+              child: Row(
+                children: [
+                  Text(
+                    '搜哪类源：',
+                    style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(width: 6),
+                  for (final (mode, label) in const [
+                    (_KindFilter.auto, '跟随本书'),
+                    (_KindFilter.comic, '漫画源'),
+                    (_KindFilter.text, '小说源'),
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                        label: Text(label, style: const TextStyle(fontSize: 11)),
+                        selected: _kind == mode,
+                        visualDensity: VisualDensity.compact,
+                        onSelected: _searching
+                            ? null
+                            : (_) {
+                                setState(() => _kind = mode);
+                                unawaited(_search(force: true));
+                              },
+                      ),
+                    ),
+                ],
+              ),
+            ),
             if (_fromCache && !_searching)
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
@@ -552,12 +621,15 @@ class _SourceSwitchSheetState extends State<_SourceSwitchSheet> {
                           [
                             if (c.author.isNotEmpty) c.author,
                             c.source.bookSourceName,
+                            if (c.source.isComic) '漫画源',
                           ].join(' · '),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 11.5,
-                            color: scheme.onSurfaceVariant,
+                            color: c.source.isComic
+                                ? scheme.primary
+                                : scheme.onSurfaceVariant,
                           ),
                         ),
                         if (SourceMarkStore.instance

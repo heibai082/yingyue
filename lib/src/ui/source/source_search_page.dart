@@ -51,6 +51,9 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
   OnlineRepo? _repo;
 
   List<BookSource> _active = const [];
+
+  /// 搜漫画源还是小说源（漫画源搜出来的书要用漫画页看）。
+  bool _comic = false;
   final Map<String, SourceSearchResult> _results = {};
   bool _searching = false;
   int _searchSeq = 0;
@@ -82,10 +85,16 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
     final key = _controller.text.trim();
     if (key.isEmpty || _searching) return;
 
-    final enabled = widget.store.enabled;
+    final enabled = widget.store.enabled
+        .where((s) => _comic ? s.isComic : s.isText)
+        .toList();
     if (enabled.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('还没有启用的书源，请先在「设置 → 书源管理」导入')),
+        SnackBar(
+          content: Text(
+            _comic ? '还没有启用的漫画源（书源类型要选「图片」）' : '还没有启用的小说源',
+          ),
+        ),
       );
       return;
     }
@@ -250,6 +259,37 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
                 : const Icon(Icons.search_rounded),
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(34),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 12, bottom: 4),
+              child: Row(
+                children: [
+                  for (final (comic, label) in const [
+                    (false, '小说源'),
+                    (true, '漫画源'),
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                        label: Text(label, style: const TextStyle(fontSize: 11)),
+                        selected: _comic == comic,
+                        visualDensity: VisualDensity.compact,
+                        onSelected: _searching
+                            ? null
+                            : (_) {
+                                setState(() => _comic = comic);
+                                _start();
+                              },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
       body: _buildBody(context),
     );

@@ -147,12 +147,17 @@ class _SourceManagerPageState extends State<SourceManagerPage> {
         ),
         subtitle: Text(
           [
+            s.isComic
+                ? '漫画源'
+                : s.isAudio
+                ? '音频源'
+                : null,
             _hostOf(s.bookSourceUrl),
             if ((s.bookSourceGroup ?? '').isNotEmpty) s.bookSourceGroup!,
             if (s.searchUrl == null) '（未配置搜索）',
             // 体检结果：连续失败会在书源体检页被自动删除
             if (s.healthFailCount > 0) '连续失败 ${s.healthFailCount} 次',
-          ].join(' · '),
+          ].whereType<String>().join(' · '),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
