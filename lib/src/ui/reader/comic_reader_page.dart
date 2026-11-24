@@ -492,20 +492,13 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
       itemBuilder: (context, i) => Padding(
         padding: const EdgeInsets.only(bottom: 2),
         // 缓存过的章节：图片直接从磁盘出（不转圈）；没缓存才走网络 + 顺手落盘
+        // 加载失败时图内自带「重试」按钮；长按整张图也能重试
         child: ComicImage(
           store: widget.store,
           bookId: widget.bookId,
           href: href,
           index: i,
           url: _images[i],
-          errorBuilder: (context, error) => Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(
-              '第 ${i + 1} 张加载失败（长按重试）',
-              style: const TextStyle(color: Colors.white54, fontSize: 12),
-              textAlign: TextAlign.center,
-            ),
-          ),
         ),
       ),
     );
@@ -522,7 +515,6 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
   }
 
   Widget _bottomBar(Book book) {
-    final last = book.chapters.length - 1;
     return SafeArea(
       top: false,
       child: Container(

@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -297,6 +297,7 @@ class _LegadoImportPageState extends State<LegadoImportPage> {
   }
 
   /// 重试模式下只挑上次失败的书，否则全部导入
+  // ignore: unused_element
   List<LegadoBook> _selectBooks(List<LegadoBook> all) {
     if (!_retryFailed || _failedNames.isEmpty) return all;
     final wanted = _failedNames.toSet();
@@ -311,6 +312,7 @@ class _LegadoImportPageState extends State<LegadoImportPage> {
   }
 
   /// 把「失败清单」落到备份文件旁边，重开 App 也能继续重试
+  // ignore: unused_element
   Future<void> _saveProgress() async {
     final f = _progressFile;
     if (f.isEmpty) return;
@@ -345,6 +347,7 @@ class _LegadoImportPageState extends State<LegadoImportPage> {
     _startImport();
   }
 
+  // ignore: unused_element
   Future<void> _showFailedSheet(BuildContext context) async {
     await ImportFailStore.instance.ensureLoaded();
     if (!mounted) return;

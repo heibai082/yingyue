@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -97,6 +97,14 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
 
   /// 读一章自动往后缓存两章（漫画预取图片列表，小说直接缓存正文）。
   bool autoPrefetchChapters = true;
+
+  /// 章节 / 漫画图片缓存的总上限（MB）。超了按「最久没读」整本清理。
+  ///
+  /// 用户反馈的隐患：漫画缓存没有上限，长期使用会把手机塞满。
+  int cacheLimitMB = 2048;
+
+  /// 只在 Wi-Fi 下缓存 / 追更（默认关闭，开了就用移动网络时不动缓存）。
+  bool wifiOnlyDownloads = false;
 
   /// 启动 / 回到前台时，给「开了自动追更」的书补新章并缓存（默认开启）。
   ///
@@ -401,6 +409,8 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           frostedGlass = data['frostedGlass'] as bool? ?? false;
           autoPrefetchChapters = data['autoPrefetchChapters'] as bool? ?? true;
           autoTrackCache = data['autoTrackCache'] as bool? ?? true;
+          cacheLimitMB = (data['cacheLimitMB'] as num?)?.toInt() ?? 2048;
+          wifiOnlyDownloads = data['wifiOnlyDownloads'] as bool? ?? false;
           webdavUrl = data['webdavUrl'] as String? ?? '';
           webdavUser = data['webdavUser'] as String? ?? '';
           webdavPass = data['webdavPass'] as String? ?? '';
@@ -598,6 +608,21 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   void setAutoPrefetchChapters(bool v) {
     if (autoPrefetchChapters == v) return;
     autoPrefetchChapters = v;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setCacheLimitMB(int mb) {
+    final v = mb.clamp(256, 16384);
+    if (cacheLimitMB == v) return;
+    cacheLimitMB = v;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setWifiOnlyDownloads(bool v) {
+    if (wifiOnlyDownloads == v) return;
+    wifiOnlyDownloads = v;
     _saveSoon();
     notifyListeners();
   }
@@ -1025,6 +1050,8 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
         'frostedGlass': frostedGlass,
         'autoPrefetchChapters': autoPrefetchChapters,
         'autoTrackCache': autoTrackCache,
+        'cacheLimitMB': cacheLimitMB,
+        'wifiOnlyDownloads': wifiOnlyDownloads,
         'webdavUrl': webdavUrl,
         'webdavUser': webdavUser,
         'webdavDir': webdavDir,

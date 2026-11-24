@@ -1,4 +1,4 @@
-// 在线书籍「离线缓存」：把整本（或一段章节）提前抓下来存本地。
+﻿// 在线书籍「离线缓存」：把整本（或一段章节）提前抓下来存本地。
 //
 // 用户反馈：「不支持离线缓存」——原先只有「读到哪缓存到哪」（翻页时顺手
 // 存一章），没法提前把书下好，地铁 / 飞机上就断粮。这里提供批量预下载。
@@ -12,6 +12,7 @@
 //   - 已缓存的章节直接跳过（可续传，重跑只补缺的）；
 //   - 失败不中断整轮：记录失败章节，最后汇总（部分成功也是成功）。
 import 'dart:async';
+import 'dart:io';
 
 import 'book_source.dart';
 import 'comic_image_cache.dart';
@@ -175,9 +176,10 @@ class OfflineDownloader {
       // 工作池：固定 concurrency 个 worker 按顺序抢 [indices] 里的下一章。
       // 用游标而不是 removeAt(0)，避免每章搬移剩余队列造成 O(n²)。
       var next = 0;
+      var stop = false;
       Future<void> worker() async {
         while (true) {
-          if (_cancelled) return;
+          if (_cancelled || stop) return;
           if (next >= indices.length) return;
           final index = indices[next++];
           current = index;
@@ -200,6 +202,8 @@ class OfflineDownloader {
                 book.id,
                 book.chapters[index].href ?? '',
                 e.images,
+                // 暂停时连当前这一话的图也别继续拉了
+                shouldCancel: () => _cancelled,
               );
               if (saved > 0) {
                 done++;
@@ -208,7 +212,9 @@ class OfflineDownloader {
               }
             }
           } catch (e) {
-            fail(_shortReason(e));
+            final noSpace = _isNoSpace(e);
+            fail(noSpace ? '存储空间不足' : _shortReason(e));
+            if (noSpace) stop = true; // 没空间就别继续下了，省得每章都失败
           }
           report();
         }
@@ -230,6 +236,18 @@ class OfflineDownloader {
     final result = snapshot();
     onProgress?.call(result);
     return result;
+  }
+
+  /// 是不是「磁盘满了」：这类失败继续下也没意义，直接停。
+  static bool _isNoSpace(Object e) {
+    if (e is FileSystemException) {
+      final code = e.osError?.errorCode;
+      if (code == 28) return true; // ENOSPC
+      final msg = '${e.osError?.message ?? ''} ${e.message}'.toLowerCase();
+      if (msg.contains('no space') || msg.contains('enospc')) return true;
+    }
+    final s = e.toString().toLowerCase();
+    return s.contains('no space left') || s.contains('enospc');
   }
 
   /// 把异常压成一句能显示在进度条下面的话（同一类失败会被合并计数）。

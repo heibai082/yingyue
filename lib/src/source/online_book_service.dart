@@ -534,10 +534,16 @@ class OnlineBookService {
     }
     // 去重但保留顺序（分页站点会有重复图）
     final seen = <String>{};
-    final urls = [
+    final deduped = [
       for (final url in out)
-        if (seen.add(url) && !looksLikeAdUrl(url)) url,
+        if (seen.add(url)) url,
     ];
+    // 广告图按地址过滤；但如果过滤完啥都不剩，说明规则可能误伤，改用原列表
+    final filtered = [
+      for (final url in deduped)
+        if (!looksLikeAdUrl(url)) url,
+    ];
+    final urls = filtered.isEmpty ? deduped : filtered;
     debugPrint(
       '[comic] static=${urls.length} first=${urls.take(3).join(' | ')}',
     );

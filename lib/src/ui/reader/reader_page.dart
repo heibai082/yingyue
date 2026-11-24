@@ -1835,21 +1835,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   void _jumpToProgress(double value) {
     final book = _book;
-    if (book == null || book.totalChars <= 0) return;
-    final target = (value.clamp(0.0, 1.0) * book.totalChars).round();
-    // 按阅读顺序累加：漫画目录降序时，进度 0% = 最老的一话、100% = 最新一话
-    final newestFirst = looksNewestFirst(book.chapters);
-    var acc = 0;
-    for (var k = 0; k < book.chapterCount; k++) {
-      final i = newestFirst ? book.chapterCount - 1 - k : k;
-      final count = book.chapters[i].charCount;
-      if (target <= acc + count || k == book.chapterCount - 1) {
-        final offset = (target - acc).clamp(0, count).toInt();
-        _goToChapter(i, offset);
-        return;
-      }
-      acc += count;
-    }
+    if (book == null || book.chapterCount == 0) return;
+    // 有字数（本地书）按字数定位；在线书没有字数，按章节比例定位（不能直接 return）
+    final index = chapterIndexForProgress(book, value);
+    _goToChapter(index, 0);
   }
 
   void _showChapterSheet() {

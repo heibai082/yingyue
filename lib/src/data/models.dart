@@ -1,4 +1,4 @@
-import 'dart:math';
+﻿import 'dart:math';
 
 /// 取章节序号：优先链接里的 `chapter_slot=123` / 末尾数字，其次标题里的「第123话」。
 ///
@@ -54,6 +54,30 @@ int readingChapterNumber(List<ChapterRef> chapters, int index) {
   if (total == 0) return 0;
   final i = index.clamp(0, total - 1);
   return looksNewestFirst(chapters) ? total - i : i + 1;
+}
+
+/// 进度条拖到 [fraction]（0~1）时该跳到哪一章（按阅读顺序）。
+///
+/// 在线书没有字数（`totalChars == 0`），以前 `_jumpToProgress` 直接 return，
+/// 进度条拖不动；这里在没字数时按章数换算，照样支持降序目录。
+int chapterIndexForProgress(Book book, double fraction) {
+  final total = book.chapterCount;
+  if (total == 0) return 0;
+  final f = fraction.clamp(0.0, 1.0);
+  final newestFirst = looksNewestFirst(book.chapters);
+  if (book.totalChars <= 0) {
+    final pos = (f * total).floor().clamp(0, total - 1);
+    return newestFirst ? total - 1 - pos : pos;
+  }
+  final target = (f * book.totalChars).round();
+  var acc = 0;
+  for (var k = 0; k < total; k++) {
+    final i = newestFirst ? total - 1 - k : k;
+    final count = book.chapters[i].charCount;
+    if (target <= acc + count || k == total - 1) return i;
+    acc += count;
+  }
+  return newestFirst ? 0 : total - 1;
 }
 
 /// 这一章算不算「已读」（按阅读顺序，不看索引大小）。
@@ -325,6 +349,10 @@ class Book {
   /// 的章节；放进 Book 后，各页面都能拿到同一份，且书一更新（追加新章）就
   /// 自动失效重算。
   Set<int> chapterCache;
+
+  /// 「只缓存了一部分」的章节（漫画：清单里有，但有的图还没落盘）。
+  /// 不写进 book.json，只用于详情页提示 —— 这些章在规划里仍会重新补。
+  Set<int> partialCache = const {};
 
   /// 追更时从站点目录发现的新章节（等正文缓存成功后才并入 [chapters]）。
   ///

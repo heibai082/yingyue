@@ -17,7 +17,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.46.0+46
+version: 0.47.0+47
 
 environment:
   sdk: ^3.13.0
@@ -35,13 +35,13 @@ dependencies:
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
+  cupertino_icons: ^2.0.0
 
   # 本地压缩包（zip / cbz）解析（纯 Dart 实现）
   archive: ^4.0.0
 
   # EPUB 解析（OPF / NCX / XHTML）
-  xml: ^6.5.0
+  xml: ^7.1.0
   html: ^0.15.4
 
   # GBK / GB2312 编码解码（TXT 小说常见编码）

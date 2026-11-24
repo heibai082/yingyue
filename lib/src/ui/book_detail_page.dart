@@ -11,6 +11,7 @@ import '../data/cache_tracker.dart';
 import '../data/models.dart';
 import '../data/offline_downloader.dart';
 import '../data/prefs.dart';
+import '../platform/native_bridge.dart';
 import '../platform/share_service.dart';
 import '../source/source_store.dart';
 import '../theme/app_theme.dart';
@@ -86,6 +87,14 @@ class _BookDetailPageState extends State<BookDetailPage> {
     if (book == null) return;
     if (_downloader.running) return;
     final messenger = ScaffoldMessenger.of(context);
+    // 只在 Wi-Fi 下缓存：移动网络时先问一句，别偷偷跑流量
+    if (widget.prefs.wifiOnlyDownloads && !await NativeBridge.isOnWifi()) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('已开启「只在 Wi-Fi 下缓存」，连上 Wi-Fi 再试')),
+      );
+      return;
+    }
 
     await _refreshCachedCount();
     if (!mounted) return;
@@ -776,7 +785,11 @@ class _OfflineCard extends StatelessWidget {
               ),
               const Spacer(),
               Text(
-                cachedCount == null ? '统计中…' : '已缓存 $cached / $total 章',
+                cachedCount == null
+                    ? '统计中…'
+                    : book.partialCache.isEmpty
+                    ? '已缓存 $cached / $total 章'
+                    : '已缓存 $cached / $total 章 · ${book.partialCache.length} 章部分',
                 style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
               ),
             ],

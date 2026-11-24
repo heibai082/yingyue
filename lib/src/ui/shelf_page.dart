@@ -1,4 +1,5 @@
-import 'dart:async';
+﻿import 'dart:async';
+
 import 'library_search_page.dart';
 import 'legado_import_page.dart';
 
@@ -163,9 +164,11 @@ class _ShelfPageState extends State<ShelfPage> {
     final failStore = ImportFailStore.instance;
     if (!_failLoaded) {
       _failLoaded = true;
-      unawaited(failStore.ensureLoaded().then((_) {
-        if (mounted) setState(() {});
-      }));
+      unawaited(
+        failStore.ensureLoaded().then((_) {
+          if (mounted) setState(() {});
+        }),
+      );
     }
     if (failStore.items.isEmpty) {
       return const SliverToBoxAdapter(child: SizedBox.shrink());
@@ -187,29 +190,30 @@ class _ShelfPageState extends State<ShelfPage> {
             subtitle: const Text('点开可逐本重新搜源', style: TextStyle(fontSize: 11)),
             trailing: const Icon(Icons.chevron_right, size: 20),
             onTap: () => showFailedBooksSheet(
-                  context,
-                  store: widget.store,
-                  sources: widget.sourceStore,
-                  onOpenSources: (sheetCtx, title) async {
-                    Navigator.of(sheetCtx).pop();
-                    await Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => SourceSearchPage(
-                          store: widget.sourceStore,
-                          bookStore: widget.store,
-                          prefs: widget.prefs,
-                          initialQuery: title,
-                        ),
-                      ),
-                    );
-                  },
-                ),
+              context,
+              store: widget.store,
+              sources: widget.sourceStore,
+              onOpenSources: (sheetCtx, title) async {
+                Navigator.of(sheetCtx).pop();
+                await Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => SourceSearchPage(
+                      store: widget.sourceStore,
+                      bookStore: widget.store,
+                      prefs: widget.prefs,
+                      initialQuery: title,
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
         ),
       ),
     );
   }
 
+  // ignore: unused_element
   Future<void> _openFailedSheet(BuildContext context) async {
     final failStore = ImportFailStore.instance;
     await failStore.ensureLoaded();
@@ -234,7 +238,10 @@ class _ShelfPageState extends State<ShelfPage> {
                         const SizedBox(width: 6),
                         Text(
                           '待搜源 ${items.length} 本',
-                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                         const Spacer(),
                         TextButton(
@@ -250,11 +257,17 @@ class _ShelfPageState extends State<ShelfPage> {
                             }
                             if (mounted) setState(() {});
                           },
-                          child: const Text('全部重搜', style: TextStyle(fontSize: 12)),
+                          child: const Text(
+                            '全部重搜',
+                            style: TextStyle(fontSize: 12),
+                          ),
                         ),
                         TextButton(
                           onPressed: () => failStore.clear(),
-                          child: const Text('清空', style: TextStyle(fontSize: 12)),
+                          child: const Text(
+                            '清空',
+                            style: TextStyle(fontSize: 12),
+                          ),
                         ),
                       ],
                     ),
@@ -277,10 +290,18 @@ class _ShelfPageState extends State<ShelfPage> {
                           final it = items[i];
                           return ListTile(
                             dense: true,
-                            title: Text(it.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            title: Text(
+                              it.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                             subtitle: it.reason.isEmpty
                                 ? null
-                                : Text(it.reason, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                : Text(
+                                    it.reason,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                             trailing: TextButton(
                               onPressed: () async {
                                 final r = await researchBook(
@@ -295,7 +316,10 @@ class _ShelfPageState extends State<ShelfPage> {
                                 );
                                 setState(() {});
                               },
-                              child: const Text('重搜', style: TextStyle(fontSize: 12)),
+                              child: const Text(
+                                '重搜',
+                                style: TextStyle(fontSize: 12),
+                              ),
                             ),
                           );
                         },
@@ -512,10 +536,7 @@ class _ShelfPageState extends State<ShelfPage> {
                 ),
                 IconButton(
                   onPressed: _refreshCovers,
-                  icon: const Icon(
-                    Icons.image_outlined,
-                    color: Colors.white,
-                  ),
+                  icon: const Icon(Icons.image_outlined, color: Colors.white),
                   tooltip: '一键更新封面',
                 ),
               ],
@@ -645,15 +666,12 @@ class _ShelfPageState extends State<ShelfPage> {
         .where(
           (b) =>
               b.format == BookFormat.online &&
-              (b.coverPath == null ||
-                  b.coverPath!.isEmpty ||
-                  b.generatedCover),
+              (b.coverPath == null || b.coverPath!.isEmpty || b.generatedCover),
         )
         .length;
     if (missing == 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('书架里的封面都是最新的，没有需要更新的')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('书架里的封面都是最新的，没有需要更新的')));
       return;
     }
     final ok = await showDialog<bool>(
@@ -679,9 +697,8 @@ class _ShelfPageState extends State<ShelfPage> {
       ),
     );
     if (ok != true || !mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已开始：$missing 本，通知栏看进度')),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('已开始：$missing 本，通知栏看进度')));
     final refresher = CoverRefresher(
       store: widget.store,
       sources: widget.sourceStore,
@@ -689,12 +706,12 @@ class _ShelfPageState extends State<ShelfPage> {
     final result = await refresher.run();
     refresher.dispose();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('封面更新：${result.summary}')),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('封面更新：${result.summary}')));
   }
 
-  void _openSearch(BuildContext context) {    showSearch(
+  void _openSearch(BuildContext context) {
+    showSearch(
       context: context,
       delegate: _ShelfSearchDelegate(
         widget.store,
@@ -1366,8 +1383,9 @@ class _ShelfPageState extends State<ShelfPage> {
             children: [
               Text(
                 canDeleteFile
-                    ? '「${book.title}」会从书架移除，本地文件默认保留。'
-                    : '「${book.title}」会从书架移除。',
+                    ? '「${book.title}」会从书架移除，本地文件默认保留；离线缓存会一起清掉。'
+                    : '「${book.title}」会从书架移除，它的离线缓存（正文 / 漫画图片）也会一起清掉，'
+                          '阅读进度和书源不受影响。',
                 style: const TextStyle(height: 1.5, fontSize: 13.5),
               ),
               if (canDeleteFile)

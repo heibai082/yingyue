@@ -69,8 +69,6 @@ void main() {
   });
 
   group('广告页判定', () {
-    List<String> urls(int n) => [for (var i = 1; i <= n; i++) 'u$i'];
-
     test('包子漫画 1180 话：正文 970 宽，第 2 张 800×1293 → 只删第 2 张', () {
       final us = _urls(18);
       final sizes = <String, ImagePixels>{

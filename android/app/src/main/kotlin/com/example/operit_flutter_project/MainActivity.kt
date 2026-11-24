@@ -144,6 +144,19 @@ class MainActivity : FlutterActivity() {
                     map["cache"] = cacheDir.absolutePath
                     result.success(map)
                 }
+                // 当前是否连着 Wi-Fi：用于「只在 Wi-Fi 下缓存 / 追更」
+                "isOnWifi" -> {
+                    val ok = try {
+                        val cm = getSystemService(CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                        val network = cm.activeNetwork
+                        val caps = cm.getNetworkCapabilities(network)
+                        caps != null &&
+                            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+                    } catch (_: Exception) {
+                        false
+                    }
+                    result.success(ok)
+                }
                 // 分享一段文本（书源 JSON 之类）：调系统分享面板，微/QQ/蓝牙都能收
                 "shareText" -> {
                     val args = call.arguments as? Map<*, *>

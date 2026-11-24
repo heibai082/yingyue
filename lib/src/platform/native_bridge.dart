@@ -36,6 +36,16 @@ class NativeBridge {
     }
   }
 
+  /// 当前是否连着 Wi-Fi（「只在 Wi-Fi 下缓存 / 追更」用）。
+  ///
+  /// 拿不到（非 Android / 调用失败）时返回 true：宁可继续缓存，
+  /// 也不要因为平台差异让用户以为功能坏了。
+  static Future<bool> isOnWifi() async {
+    if (!_supported) return true;
+    final value = await _invoke<bool>('isOnWifi');
+    return value ?? true;
+  }
+
   /// 是否已获得读取外部存储的权限。
   static Future<bool> hasStoragePermission() async {
     if (!_supported) return true;

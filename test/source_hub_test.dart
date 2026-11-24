@@ -1,4 +1,4 @@
-// 源仓库抓取 + 每日自动同步的回归测试（不联网，全部用 MockClient / 假检测器）。
+﻿// 源仓库抓取 + 每日自动同步的回归测试（不联网，全部用 MockClient / 假检测器）。
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -18,7 +18,8 @@ String _indexHtml({
   String time = '3小时前',
   int id = 1341,
   String segment = 'shuyuans',
-}) => '''
+}) =>
+    '''
 <div class="layui-card-body">
   <div class="ylist">
     <h2><a href="/yuedu/$segment/content/id/$id.html">自用整理·精品书源</a>
@@ -45,22 +46,32 @@ List<Map<String, dynamic>> _twoSources() => [
 void main() {
   group('源仓库地址解析', () {
     test('站点根 / 书源页 / 合集页都能认出来', () {
-      expect(HubTarget.parse('https://www.yckceo.com')!.kind, HubKind.collections);
       expect(
-        HubTarget.parse('https://www.yckceo.com/yuedu/shuyuan/index.html')!.kind,
+        HubTarget.parse('https://www.yckceo.com')!.kind,
+        HubKind.collections,
+      );
+      expect(
+        HubTarget.parse('https://www.yckceo.com/yuedu/shuyuan/index.html')!
+            .kind,
         HubKind.sources,
       );
       expect(
-        HubTarget.parse('https://www.yckceo.com/yuedu/shuyuans/index.html')!.kind,
+        HubTarget.parse('https://www.yckceo.com/yuedu/shuyuans/index.html')!
+            .kind,
         HubKind.collections,
       );
     });
 
     test('省略协议自动补 https；保留自定义端口', () {
-      final t = HubTarget.parse('hub.example.com:8443/yuedu/shuyuan/index.html')!;
+      final t = HubTarget.parse(
+        'hub.example.com:8443/yuedu/shuyuan/index.html',
+      )!;
       expect(t.baseUrl, 'https://hub.example.com:8443');
       expect(t.kind, HubKind.sources);
-      expect(t.indexUrl, 'https://hub.example.com:8443/yuedu/shuyuan/index.html');
+      expect(
+        t.indexUrl,
+        'https://hub.example.com:8443/yuedu/shuyuan/index.html',
+      );
     });
 
     test('空 / 非法返回 null', () {
@@ -82,15 +93,16 @@ void main() {
     });
 
     test('全部为空 / 非法时回落到默认', () {
-      expect(HubTarget.parseAll('').single.indexUrl,
-          'https://www.yckceo.com/yuedu/shuyuans/index.html');
-      expect(HubTarget.parseAll('  \n  ').single.baseUrl, 'https://www.yckceo.com');
       expect(
-        HubTarget.parseAll('', fallbackToDefault: false),
-        isEmpty,
+        HubTarget.parseAll('').single.indexUrl,
+        'https://www.yckceo.com/yuedu/shuyuans/index.html',
       );
+      expect(
+        HubTarget.parseAll('  \n  ').single.baseUrl,
+        'https://www.yckceo.com',
+      );
+      expect(HubTarget.parseAll('', fallbackToDefault: false), isEmpty);
     });
-
 
     test('单个书源页的列表也能解析（segment=shuyuan）', () {
       final items = parseHubIndex(
@@ -111,14 +123,29 @@ void main() {
 
     test('相对时间', () {
       expect(parseHubTime('刚刚', now: now), now);
-      expect(parseHubTime('2小时前', now: now), now.subtract(const Duration(hours: 2)));
-      expect(parseHubTime('3天前', now: now), now.subtract(const Duration(days: 3)));
-      expect(parseHubTime('昨天', now: now), now.subtract(const Duration(days: 1)));
+      expect(
+        parseHubTime('2小时前', now: now),
+        now.subtract(const Duration(hours: 2)),
+      );
+      expect(
+        parseHubTime('3天前', now: now),
+        now.subtract(const Duration(days: 3)),
+      );
+      expect(
+        parseHubTime('昨天', now: now),
+        now.subtract(const Duration(days: 1)),
+      );
     });
 
     test('绝对时间：月/日 与 年-月-日', () {
-      expect(parseHubTime('11/12 11:41', now: now), DateTime(2026, 11, 12, 11, 41));
-      expect(parseHubTime('2025-06-01 08:00', now: now), DateTime(2025, 6, 1, 8));
+      expect(
+        parseHubTime('11/12 11:41', now: now),
+        DateTime(2026, 11, 12, 11, 41),
+      );
+      expect(
+        parseHubTime('2025-06-01 08:00', now: now),
+        DateTime(2025, 6, 1, 8),
+      );
     });
 
     test('看不懂的返回 null', () {
@@ -129,12 +156,18 @@ void main() {
 
   group('首页解析', () {
     test('抓到 id / 标题 / json 地址 / 时间 / 源数量', () {
-      final items = parseHubIndex(_indexHtml(), now: DateTime(2026, 11, 22, 14));
+      final items = parseHubIndex(
+        _indexHtml(),
+        now: DateTime(2026, 11, 22, 14),
+      );
       expect(items, hasLength(1));
       final it = items.first;
       expect(it.id, 1341);
       expect(it.title, '自用整理·精品书源');
-      expect(it.jsonUrl, 'https://www.yckceo.com/yuedu/shuyuans/json/id/1341.json');
+      expect(
+        it.jsonUrl,
+        'https://www.yckceo.com/yuedu/shuyuans/json/id/1341.json',
+      );
       expect(it.sourceCount, 2);
       expect(it.time, isNotNull);
     });
@@ -166,12 +199,18 @@ void main() {
         client: MockClient((req) async {
           requests?.add(req.url.toString());
           if (req.url.path.contains('/yuedu/shuyuans/index.html')) {
-            return http.Response.bytes(utf8.encode(_indexHtml(time: time, id: id)), 200,
-                headers: {'content-type': 'text/html; charset=utf-8'});
+            return http.Response.bytes(
+              utf8.encode(_indexHtml(time: time, id: id)),
+              200,
+              headers: {'content-type': 'text/html; charset=utf-8'},
+            );
           }
           if (req.url.path.endsWith('.json')) {
-            return http.Response.bytes(utf8.encode(jsonEncode(sources)), 200,
-                headers: {'content-type': 'application/json; charset=utf-8'});
+            return http.Response.bytes(
+              utf8.encode(jsonEncode(sources)),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
           }
           return http.Response('nope', 404);
         }),
@@ -183,7 +222,8 @@ void main() {
         store: store,
         prefs: prefs,
         client: clientFor(time: '3小时前', sources: _twoSources()),
-        checker: (s, k) async => const SourceCheckOutcome(ok: true, elapsedMs: 50),
+        checker: (s, k) async =>
+            const SourceCheckOutcome(ok: true, elapsedMs: 50),
       );
 
       final report = await sync.runIfDue();
@@ -203,7 +243,10 @@ void main() {
       // 模拟昨天同步过 + 已有书源 → 走日常 24h 窗口
       prefs.setSourceSyncDay('2026-11-21');
       store.addAll([
-        BookSource(bookSourceUrl: 'https://seed1.example.com', bookSourceName: '种子源'),
+        BookSource(
+          bookSourceUrl: 'https://seed1.example.com',
+          bookSourceName: '种子源',
+        ),
       ]);
       final sync = DailySourceSync(
         store: store,
@@ -239,13 +282,14 @@ void main() {
     });
 
     test('体检连续失败 2 次会删源（跨两次运行累计）', () async {
-      var pass = 0;
+      // 记录体检回调被调了几次（下面断言用）
+      var passed = 0;
       final sync = DailySourceSync(
         store: store,
         prefs: prefs,
         client: clientFor(time: '1小时前', sources: _twoSources()),
         checker: (s, k) async {
-          pass++;
+          passed++;
           return const SourceCheckOutcome(ok: false, error: '超时');
         },
       );
@@ -258,11 +302,15 @@ void main() {
       expect(second.checked, 2);
       expect(second.removed, 2, reason: '第二次仍失败 → 自动删除');
       expect(store.sources, isEmpty);
+      expect(passed, 4, reason: '两次运行各体检 2 个源');
     });
 
     test('已有书源时只认 24 小时：三天前的合集不导入', () async {
       store.addAll([
-        BookSource(bookSourceUrl: 'https://seed2.example.com', bookSourceName: '种子源'),
+        BookSource(
+          bookSourceUrl: 'https://seed2.example.com',
+          bookSourceName: '种子源',
+        ),
       ]);
       final sync = DailySourceSync(
         store: store,
@@ -326,7 +374,8 @@ void main() {
         store: store,
         prefs: prefs,
         client: clientFor(time: '1小时前', sources: _twoSources()),
-        checker: (s, k) async => const SourceCheckOutcome(ok: false, error: '超时'),
+        checker: (s, k) async =>
+            const SourceCheckOutcome(ok: false, error: '超时'),
       );
 
       // 第一轮：体检把 A 站删掉（连续失败 2 次）
@@ -445,7 +494,8 @@ void main() {
         store: store,
         prefs: prefs,
         client: clientFor(time: '1小时前', sources: _twoSources()),
-        checker: (s, k) async => const SourceCheckOutcome(ok: false, error: '不该被调用'),
+        checker: (s, k) async =>
+            const SourceCheckOutcome(ok: false, error: '不该被调用'),
       );
       final report = await sync.runIfDue(
         force: true,
@@ -459,10 +509,7 @@ void main() {
       expect(report.log, isNotNull);
       expect(report.log!.addedCount, 2);
       expect(report.log!.byCollection.keys.single, contains('自用整理'));
-      expect(
-        report.log!.items.map((e) => e.name),
-        containsAll(['A 站', 'B 站']),
-      );
+      expect(report.log!.items.map((e) => e.name), containsAll(['A 站', 'B 站']));
       expect(report.log!.items.first.url, contains('example.com'));
     });
 
@@ -513,8 +560,5 @@ void main() {
   });
 }
 
-BookSource _src(String url, String name) => BookSource(
-  bookSourceUrl: url,
-  bookSourceName: name,
-);
-
+BookSource _src(String url, String name) =>
+    BookSource(bookSourceUrl: url, bookSourceName: name);

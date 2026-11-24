@@ -143,8 +143,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (!widget.prefs.agreementAccepted) return;
     if (!widget.prefs.autoTrackCache) return;
     if (kPetGuideActive.value || kPetEggActive.value) return;
+    // 只在 Wi-Fi 下缓存：移动网络时先不追更（用户可在设置里关掉这条限制）
+    if (widget.prefs.wifiOnlyDownloads && !await NativeBridge.isOnWifi()) {
+      debugPrint('[cache_track] 非 Wi-Fi，跳过自动追更');
+      return;
+    }
     try {
+      // 先清孤儿（书架里已没有的书）再追更：避免越用越占地方
+      await widget.store.pruneOrphanCaches();
       final results = await _cacheTracker.trackAll();
+      // 追更完看一次上限，超了就按最久没读整本清理
+      await widget.store.enforceCacheLimit(widget.prefs.cacheLimitMB);
       if (!mounted) return;
       final changed = results.where((r) => r.changed).toList();
       if (changed.isEmpty) return;

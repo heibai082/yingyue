@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
-
 import '../platform/native_bridge.dart';
 
 /// 一条缓存的换源候选。
@@ -75,7 +73,9 @@ class SourceCacheStore {
         if (v is List) {
           _cache[k.toString()] = v
               .whereType<Map>()
-              .map((e) => CachedCandidate.fromJson(Map<String, dynamic>.from(e)))
+              .map(
+                (e) => CachedCandidate.fromJson(Map<String, dynamic>.from(e)),
+              )
               .toList();
         }
       });

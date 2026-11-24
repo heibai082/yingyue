@@ -1151,24 +1151,118 @@ class _SettingsPageState extends State<SettingsPage> {
               style: TextStyle(fontSize: 12),
             ),
           ),
-          ListTile(
+          SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.text_snippet_rounded),
-            title: const Text('EPUB 章节缓存', style: TextStyle(fontSize: 14)),
-            subtitle: Text(
-              _cacheBytes == null ? '计算中…' : formatBytes(_cacheBytes!),
+            value: widget.prefs.wifiOnlyDownloads,
+            onChanged: widget.prefs.setWifiOnlyDownloads,
+            secondary: const Icon(Icons.wifi_rounded),
+            title: const Text('只在 Wi-Fi 下缓存', style: TextStyle(fontSize: 14)),
+            subtitle: const Text(
+              '打开后，用移动网络时既不自动追更，点「开始缓存」也会先拦住',
+              style: TextStyle(fontSize: 12),
             ),
           ),
-          OutlinedButton.icon(
-            onPressed: () async {
-              final messenger = ScaffoldMessenger.of(context);
-              await widget.store.clearCache();
-              await _loadCacheSize();
-              if (!mounted) return;
-              messenger.showSnackBar(const SnackBar(content: Text('缓存已清空')));
-            },
-            icon: const Icon(Icons.delete_sweep_rounded, size: 18),
-            label: const Text('清除缓存'),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.sd_storage_rounded),
+            title: const Text('章节与图片缓存（含离线下载）', style: TextStyle(fontSize: 14)),
+            subtitle: Text(
+              _cacheBytes == null
+                  ? '计算中…'
+                  : '${formatBytes(_cacheBytes!)} · 上限 ${widget.prefs.cacheLimitMB} MB',
+            ),
+          ),
+          // 缓存上限：超了自动按「最久没读」整本清理（B4）
+          Row(
+            children: [
+              const Icon(Icons.tune_rounded, size: 18),
+              const SizedBox(width: 8),
+              const Text('缓存上限', style: TextStyle(fontSize: 13)),
+              Expanded(
+                child: Slider(
+                  value: widget.prefs.cacheLimitMB.clamp(256, 8192).toDouble(),
+                  min: 256,
+                  max: 8192,
+                  divisions: 31,
+                  label: '${widget.prefs.cacheLimitMB} MB',
+                  onChanged: (v) =>
+                      widget.prefs.setCacheLimitMB((v / 256).round() * 256),
+                ),
+              ),
+              Text(
+                widget.prefs.cacheLimitMB >= 1024
+                    ? '${(widget.prefs.cacheLimitMB / 1024).toStringAsFixed(1)} GB'
+                    : '${widget.prefs.cacheLimitMB} MB',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    final size = _cacheBytes;
+                    final ok = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('清除全部缓存？'),
+                        content: Text(
+                          '会删掉所有书的离线下载（正文 + 漫画图片）'
+                          '${size == null ? '' : '，约 ${formatBytes(size)}'}。\n'
+                          '阅读进度、书架、书源不受影响；下次联网会重新缓存。',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, false),
+                            child: const Text('取消'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text('清除'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (ok != true) return;
+                    await widget.store.clearCache();
+                    await _loadCacheSize();
+                    if (!mounted) return;
+                    messenger.showSnackBar(
+                      const SnackBar(content: Text('缓存已清空')),
+                    );
+                  },
+                  icon: const Icon(Icons.delete_sweep_rounded, size: 18),
+                  label: const Text('清除全部缓存'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    final orphans = await widget.store.pruneOrphanCaches();
+                    final freed = await widget.store.enforceCacheLimit(
+                      widget.prefs.cacheLimitMB,
+                    );
+                    await _loadCacheSize();
+                    if (!mounted) return;
+                    messenger.showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          '已清理 ${orphans} 本孤儿缓存'
+                          '${freed > 0 ? '，按上限释放 ${formatBytes(freed)}' : ''}',
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.auto_delete_rounded, size: 18),
+                  label: const Text('立即清理'),
+                ),
+              ),
+            ],
           ),
         ],
       ),

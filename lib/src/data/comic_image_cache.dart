@@ -1,4 +1,4 @@
-// 漫画「这一话已经缓存过」= 图片真的在磁盘上，而不是只有图片地址。
+﻿// 漫画「这一话已经缓存过」= 图片真的在磁盘上，而不是只有图片地址。
 //
 // 用户反馈：「缓存完了的章节不应该是秒开么，为什么还要转圈」。
 // 0.41 之前的「漫画缓存」只把「章节 → 图片 URL 清单」存下来：地址有了，
@@ -42,18 +42,11 @@ File comicImageCacheFile(
   int index,
   String url,
 ) {
-  final ext = _imageExt(url);
-  final name = comicImageKey(url);
-  return File('${comicChapterImageDir(store, bookId, href).path}/$name$ext');
-}
-
-/// 从 URL 猜图片后缀（站点常在路径上带 .jpg / .webp）。
-String _imageExt(String url) {
-  final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
-  for (final ext in const ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif']) {
-    if (path.endsWith(ext)) return ext == '.jpeg' ? '.jpg' : ext;
-  }
-  return '.jpg';
+  final dir = comicChapterImageDir(store, bookId, href);
+  // 先按「当前 URL」找；找不到再看清单（站点换 CDN / 换签名后仍能复用旧图）
+  final resolved = ChapterCache.resolveImage(dir, index, url);
+  if (resolved != null) return resolved;
+  return File('${dir.path}/${ChapterCache.imageFileName(url)}');
 }
 
 /// 这张图是否已经在磁盘上。
@@ -81,6 +74,7 @@ Future<int> cacheComicImages(
   String href,
   List<String> urls, {
   void Function(int done, int total)? onProgress,
+  bool Function()? shouldCancel,
 }) async {
   if (urls.isEmpty) return 0;
   final dir = comicChapterImageDir(store, bookId, href);
@@ -89,26 +83,57 @@ Future<int> cacheComicImages(
   } catch (_) {
     return 0;
   }
+  final dirPath = dir;
+  // 只下正文图（广告横幅不下载、不占空间）
+  final wanted = <int>[
+    for (var i = 0; i < urls.length; i++)
+      if (!looksLikeAdUrl(urls[i])) i,
+  ];
   var ok = 0;
-  for (var i = 0; i < urls.length; i++) {
-    if (looksLikeAdUrl(urls[i])) continue; // 广告横幅不下载、不占空间
-    if (comicImageCached(store, bookId, href, i, urls[i])) {
-      ok++;
-      onProgress?.call(i + 1, urls.length);
-      continue;
-    }
-    final bytes = await _download(urls[i], href);
-    if (bytes != null && bytes.isNotEmpty) {
+  var done = 0;
+
+  // 并发 3：比逐张等下快，又不至于把站点惹毛
+  var next = 0;
+  Future<void> worker() async {
+    while (true) {
+      if (shouldCancel?.call() ?? false) return;
+      if (next >= wanted.length) return;
+      final i = wanted[next++];
+      final url = urls[i];
       try {
-        final target = comicImageCacheFile(store, bookId, href, i, urls[i]);
-        final tmp = File('${target.path}.part');
-        await tmp.writeAsBytes(bytes, flush: false);
-        await tmp.rename(target.path);
-        ok++;
-      } catch (_) {}
+        if (comicImageCached(store, bookId, href, i, url)) {
+          ok++;
+        } else {
+          final bytes = await _download(url, href);
+          if (bytes != null && bytes.isNotEmpty) {
+            final target = File(
+              '${dirPath.path}/${ChapterCache.imageFileName(url)}',
+            );
+            final tmp = File('${target.path}.part');
+            await tmp.writeAsBytes(bytes, flush: false);
+            await tmp.rename(target.path);
+            ok++;
+          }
+        }
+      } catch (e) {
+        // 单张失败不影响整话；写满磁盘时下面会统一提示
+        debugPrint('[comic] 图片缓存失败：$e');
+      } finally {
+        done++;
+        onProgress?.call(done, wanted.length);
+      }
     }
-    onProgress?.call(i + 1, urls.length);
   }
+
+  await Future.wait([for (var i = 0; i < 3; i++) worker()]);
+
+  // 记清单：顺序 = 当前这一话的图片顺序（含之前已经存过的）
+  final entries = <Map<String, String>>[
+    for (var i = 0; i < urls.length; i++)
+      if (!looksLikeAdUrl(urls[i]))
+        {'u': urls[i], 'f': ChapterCache.imageFileName(urls[i])},
+  ];
+  if (entries.isNotEmpty) await ChapterCache.writeManifest(dirPath, entries);
   return ok;
 }
 
@@ -142,7 +167,7 @@ Future<Uint8List?> _download(String url, String referer) async {
 }
 
 /// 漫画图：先看磁盘缓存（命中就同步出图，不闪转圈），没有再走网络并顺手落盘。
-class ComicImage extends StatelessWidget {
+class ComicImage extends StatefulWidget {
   const ComicImage({
     super.key,
     required this.store,
@@ -152,7 +177,6 @@ class ComicImage extends StatelessWidget {
     required this.url,
     this.fit = BoxFit.fitWidth,
     this.placeholderRatio = 3 / 4,
-    this.errorBuilder,
   });
 
   final BookStore store;
@@ -162,24 +186,45 @@ class ComicImage extends StatelessWidget {
   final String url;
   final BoxFit fit;
   final double placeholderRatio;
-  final Widget Function(BuildContext, Object)? errorBuilder;
+
+  @override
+  State<ComicImage> createState() => _ComicImageState();
+}
+
+class _ComicImageState extends State<ComicImage> {
+  /// 重试次数：换 key 让 Flutter 重新发起请求（失败不会被图片缓存记住）。
+  int _attempt = 0;
+
+  void _retry() {
+    try {
+      imageCache.evict(NetworkImage(widget.url));
+    } catch (_) {}
+    if (mounted) setState(() => _attempt++);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final file = comicImageCacheFile(store, bookId, href, index, url);
+    final file = comicImageCacheFile(
+      widget.store,
+      widget.bookId,
+      widget.href,
+      widget.index,
+      widget.url,
+    );
     final cached = _cachedIfPresent(file);
-    final image = cached != null
-        // 本地文件：首帧就有，不需要 loadingBuilder
-        ? Image.file(
-            File(cached),
-            fit: fit,
-            gaplessPlayback: true,
-            errorBuilder: errorBuilder == null
-                ? null
-                : (ctx, e, st) => errorBuilder!(ctx, e),
-          )
-        : _networkWithCache(context);
-    return image;
+    // 长按整张图 = 重试（对应失败提示里的「长按重试」）
+    return GestureDetector(
+      onLongPress: _retry,
+      child: cached != null
+          ? Image.file(
+              File(cached),
+              key: ValueKey('file-${file.path}-$_attempt'),
+              fit: widget.fit,
+              gaplessPlayback: true,
+              errorBuilder: (ctx, e, st) => _errorBox(ctx),
+            )
+          : _networkWithCache(),
+    );
   }
 
   /// 磁盘上真有这张图才返回路径（空文件 / 读失败都不算）。
@@ -190,17 +235,18 @@ class ComicImage extends StatelessWidget {
     return null;
   }
 
-  Widget _networkWithCache(BuildContext context) {
+  Widget _networkWithCache() {
     return Image.network(
-      url,
-      fit: fit,
+      widget.url,
+      key: ValueKey('net-${widget.url}-$_attempt'),
+      fit: widget.fit,
       gaplessPlayback: true,
-      headers: _refererHeaders(href),
+      headers: _refererHeaders(widget.href),
       loadingBuilder: (ctx, child, progress) {
         if (progress == null) return child;
         final total = progress.expectedTotalBytes;
         return AspectRatio(
-          aspectRatio: placeholderRatio,
+          aspectRatio: widget.placeholderRatio,
           child: Center(
             child: CircularProgressIndicator(
               value: total == null
@@ -211,9 +257,29 @@ class ComicImage extends StatelessWidget {
           ),
         );
       },
-      errorBuilder: errorBuilder == null
-          ? null
-          : (ctx, e, st) => errorBuilder!(ctx, e),
+      errorBuilder: (ctx, e, st) => _errorBox(ctx),
+    );
+  }
+
+  Widget _errorBox(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            '这张图加载失败',
+            style: TextStyle(color: Colors.white54, fontSize: 12),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          TextButton.icon(
+            onPressed: _retry,
+            icon: const Icon(Icons.refresh_rounded, size: 16),
+            label: const Text('重试', style: TextStyle(fontSize: 12)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -222,18 +288,4 @@ class ComicImage extends StatelessWidget {
     if (u == null || !u.hasScheme) return null;
     return {'Referer': href};
   }
-}
-
-/// 给阅读页 / 追更用的「这一话有多少张图已经在本地」统计。
-Future<int> comicCachedCount(
-  BookStore store,
-  String bookId,
-  String href,
-  List<String> urls,
-) async {
-  var n = 0;
-  for (var i = 0; i < urls.length; i++) {
-    if (comicImageCached(store, bookId, href, i, urls[i])) n++;
-  }
-  return n;
 }

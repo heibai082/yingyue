@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -75,6 +75,11 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
       if (f.existsSync() && f.lengthSync() > 0) return true;
       final img = ChapterCache.imageDirFor(_dirsOrTemp, book, index);
       if (!img.existsSync()) return false;
+      // 有清单：清单里的图都在才算缓存好（半缓存的章会重新补）
+      if (ChapterCache.readManifest(img) != null) {
+        return ChapterCache.chapterComplete(img, null);
+      }
+      // 老缓存（0.45 及更早）没有清单：只要目录里有图就算，等补清单后自然变精确
       for (final e in img.listSync(followLinks: false)) {
         if (e is File) {
           try {
@@ -141,7 +146,7 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
     notifyListeners();
     // 老版本的缓存放在「系统缓存目录 + 按章序号命名」的地方：能搬的搬过来，
     // 搬不动的（对不上号）就别当缓存用，免得把别的章正文当成这一章。
-    unawaited(migrateLegacyCaches());
+    unawaited(_migration = _migrateOnce());
   }
 
   /// 把旧位置的章节缓存搬进持久目录（`<files>/books`）。
@@ -160,6 +165,19 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
   Future<void> migrateLegacyCaches() {
     // 只跑一次；后来者等同一份 future（load() 里是后台触发，测试里可以 await）
     return _migration ??= _migrateAll();
+  }
+
+  /// load() 走这个：搬过一次就记 marker，之后启动不再扫（B7）。
+  Future<void> _migrateOnce() async {
+    final marker = File('${_dirsOrTemp.files}/.chapter_cache_v3');
+    try {
+      if (await marker.exists()) return;
+    } catch (_) {}
+    await _migrateAll();
+    await buildMissingManifests();
+    try {
+      await marker.writeAsString(DateTime.now().toIso8601String());
+    } catch (_) {}
   }
 
   Future<void> _migrateAll() async {
@@ -185,6 +203,55 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
       }
     }
     if (changed && !_disposed) notifyListeners();
+  }
+
+  /// 给「有图但没清单」的老漫画缓存补 manifest（一次性，marker 控制）。
+  ///
+  /// 没有清单就没法判断「这一话到底齐不齐」，也复用不了换 URL 后的旧图；
+  /// 这里按缓存里的图片清单（`comic_list_cache.json`）把顺序补出来。
+  Future<void> buildMissingManifests() async {
+    if (_disposed) return;
+    final marker = File('${_dirsOrTemp.files}/.comic_manifest_v1');
+    try {
+      if (await marker.exists()) return;
+    } catch (_) {}
+    final dirs = _dirsOrTemp;
+    for (final book in List<Book>.of(_books)) {
+      if (book.format != BookFormat.online) continue;
+      try {
+        final bookDir = ChapterCache.dirFor(dirs, book);
+        final listFile = File('${bookDir.path}/comic_list_cache.json');
+        if (!await listFile.exists()) continue;
+        final decoded = jsonDecode(await listFile.readAsString());
+        if (decoded is! Map) continue;
+        for (final entry in decoded.entries) {
+          final href = entry.key.toString();
+          final urls = entry.value;
+          if (href.isEmpty || urls is! List) continue;
+          final imgDir = Directory(
+            '${bookDir.path}/img/${ChapterCache.chapterKey(ChapterRef(title: '', href: href), 0)}',
+          );
+          if (!await imgDir.exists()) continue;
+          if (ChapterCache.readManifest(imgDir) != null) continue;
+          final entries = <Map<String, String>>[];
+          for (final u in urls) {
+            if (u is! String || u.isEmpty) continue;
+            final f = File('${imgDir.path}/${ChapterCache.imageFileName(u)}');
+            if (f.existsSync() && f.lengthSync() > 0) {
+              entries.add({'u': u, 'f': ChapterCache.imageFileName(u)});
+            }
+          }
+          if (entries.isNotEmpty) {
+            await ChapterCache.writeManifest(imgDir, entries);
+          }
+        }
+      } catch (e) {
+        debugPrint('[cache] 补漫画清单失败：$e');
+      }
+    }
+    try {
+      await marker.writeAsString(DateTime.now().toIso8601String());
+    } catch (_) {}
   }
 
   Future<bool> _migrateOneBook(
@@ -326,7 +393,8 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
     final total = book.chapters.length;
     if (total == 0) return null;
     // 站点只会往「最新」那头插新话：降序目录 → 老序号整体 +k（k ≥ 0）
-    final maxShift = looksNewestFirst(book.chapters) ? 120 : 0;
+    // 站点可能一次补很多话，搜索范围放宽到 400；命中满分就提前收工
+    final maxShift = looksNewestFirst(book.chapters) ? 400 : 0;
     // 抽样：均匀取最多 8 章核对标题
     final samples = <int>[];
     final step = total <= 8 ? 1 : total ~/ 8;
@@ -358,6 +426,7 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
       if (score > bestScore) {
         bestScore = score;
         bestShift = shift;
+        if (score >= samples.length) break; // 全中，不用再搜
       }
     }
     if (bestScore <= 0) return null;
@@ -466,7 +535,11 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
   /// [deleteLocalFile] 为 true 时顺带删除这本书的本地文件（用户反馈：
   /// 想把书移走时直接连着本地文件一起删掉）。只删书架里登记的那个文件，
   /// 同一路径被另一本书引用时保留，避免误删别人还在用的书。
-  Future<void> removeById(String id, {bool deleteLocalFile = false}) async {
+  Future<void> removeById(
+    String id, {
+    bool deleteLocalFile = false,
+    bool deleteCache = true,
+  }) async {
     final book = byId(id);
     if (book == null) return;
     final before = _books.length;
@@ -476,6 +549,15 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
     BookmarkStore.shared?.removeForBook(id);
     _saveSoon();
     notifyListeners();
+    // 缓存（含漫画图片）跟着书一起删：否则会变成没人认领的孤儿目录
+    if (deleteCache) {
+      try {
+        final dir = ChapterCache.dirFor(_dirsOrTemp, book);
+        if (await dir.exists()) await dir.delete(recursive: true);
+      } catch (e) {
+        debugPrint('[cache] 删除本书缓存失败：$e');
+      }
+    }
     if (!deleteLocalFile) return;
     final path = book.path;
     if (path.isEmpty) return;
@@ -749,6 +831,81 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
     return total;
   }
 
+  /// 删掉「书架里已经不存在的书」留下的缓存目录（B4 / A3 的兜底）。
+  Future<int> pruneOrphanCaches() async {
+    final root = chapterCacheRoot;
+    var removed = 0;
+    try {
+      if (!await root.exists()) return 0;
+      final valid = {for (final b in _books) ChapterCache.bookKey(b)};
+      final orphan = <Directory>[];
+      await for (final e in root.list(followLinks: false)) {
+        if (e is! Directory) continue;
+        if (valid.contains(_baseName(e))) continue;
+        orphan.add(e);
+      }
+      for (final dir in orphan) {
+        try {
+          await dir.delete(recursive: true);
+          removed++;
+        } catch (e) {
+          debugPrint('[cache] 清理孤儿缓存失败：$e');
+        }
+      }
+    } catch (e) {
+      debugPrint('[cache] 扫描孤儿缓存失败：$e');
+    }
+    return removed;
+  }
+
+  /// 缓存上限（MB）：超了就按「最久没读」整本删，直到降下来。
+  ///
+  /// 返回删掉的字节数。0 = 没超 / 没删。
+  Future<int> enforceCacheLimit(int limitMB) async {
+    if (limitMB <= 0) return 0;
+    final limit = limitMB * 1024 * 1024;
+    final dirs = _dirsOrTemp;
+    final entries = <({Book book, Directory dir, int bytes})>[];
+    var total = 0;
+    for (final book in _books) {
+      final dir = ChapterCache.dirFor(dirs, book);
+      try {
+        if (!await dir.exists()) continue;
+      } catch (_) {
+        continue;
+      }
+      var bytes = 0;
+      try {
+        await for (final e in dir.list(recursive: true, followLinks: false)) {
+          if (e is File) {
+            try {
+              bytes += await e.length();
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+      if (bytes <= 0) continue;
+      entries.add((book: book, dir: dir, bytes: bytes));
+      total += bytes;
+    }
+    if (total <= limit) return 0;
+    entries.sort((a, b) => a.book.lastReadAt.compareTo(b.book.lastReadAt));
+    var freed = 0;
+    for (final e in entries) {
+      if (total - freed <= limit) break;
+      try {
+        await e.dir.delete(recursive: true);
+        e.book.chapterCache = const {};
+        e.book.partialCache = const {};
+        freed += e.bytes;
+      } catch (e2) {
+        debugPrint('[cache] 清理超限缓存失败：$e2');
+      }
+    }
+    if (freed > 0 && !_disposed) notifyListeners();
+    return freed;
+  }
+
   /// 清除某本书的章节缓存（该书改源 / 想重新抓取时用）。
   Future<void> clearBookCache(String bookId) async {
     try {
@@ -765,12 +922,72 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
   Future<Set<int>> refreshChapterCache(String bookId) async {
     final book = byId(bookId);
     if (book == null) return <int>{};
-    final set = <int>{};
+    final dir = chapterCacheDir(bookId);
+    // 章 key → 序号：一次算好，后面只做查表（不再每章 stat 一遍）
+    final byKey = <String, int>{};
     for (var i = 0; i < book.chapters.length; i++) {
-      if (hasCachedChapter(book, i)) set.add(i);
+      byKey[ChapterCache.chapterKey(book.chapters[i], i)] = i;
     }
-    book.chapterCache = set;
-    return set;
+    final complete = <int>{};
+    final partial = <int>{};
+    try {
+      if (await dir.exists()) {
+        // 正文：整个目录列一次
+        await for (final e in dir.list(followLinks: false)) {
+          if (e is! File) continue;
+          final name = _baseName(e);
+          if (!name.startsWith('ch3_') || !name.endsWith('.txt')) continue;
+          final idx = byKey[name.substring(4, name.length - 4)];
+          if (idx == null) continue;
+          try {
+            if (await e.length() > 0) complete.add(idx);
+          } catch (_) {}
+        }
+        // 漫画图片：img 目录列一次，逐话看清单是否齐全
+        final imgRoot = Directory('${dir.path}/img');
+        if (await imgRoot.exists()) {
+          await for (final e in imgRoot.list(followLinks: false)) {
+            if (e is! Directory) continue;
+            final idx = byKey[_baseName(e)];
+            if (idx == null) continue;
+            if (ChapterCache.readManifest(e) != null) {
+              if (ChapterCache.chapterComplete(e, null)) {
+                complete.add(idx);
+              } else if (await _hasAnyFile(e)) {
+                partial.add(idx);
+              }
+            } else if (await _hasAnyFile(e)) {
+              // 老缓存没有清单：先当完整，补清单后再精确
+              complete.add(idx);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[cache] 扫描缓存失败：$e');
+    }
+    book.chapterCache = complete;
+    book.partialCache = partial;
+    return complete;
+  }
+
+  /// 取路径最后一段（目录 URI 在 Windows 上以 `/` 结尾，直接用 `.last` 会拿到空串）。
+  static String _baseName(FileSystemEntity entity) {
+    final segments = entity.uri.pathSegments.where((s) => s.isNotEmpty);
+    return segments.isEmpty ? '' : segments.last;
+  }
+
+  /// 目录里有没有至少一个非空文件（判断「半缓存」用）。
+  Future<bool> _hasAnyFile(Directory dir) async {
+    try {
+      await for (final e in dir.list(followLinks: false)) {
+        if (e is! File) continue;
+        try {
+          if (await e.length() > 0) return true;
+        } catch (_) {}
+      }
+    } catch (_) {}
+    return false;
   }
 
   /// 更新一本书的缓存范围偏好（详情页「缓存设置」）。

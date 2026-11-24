@@ -11,7 +11,6 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../platform/import_foreground.dart';
-import '../source/models.dart';
 import '../source/online_book_service.dart';
 import '../source/source_store.dart';
 import 'app_activity.dart';
@@ -198,7 +197,10 @@ class CoverRefresher extends ChangeNotifier {
       bytes = await _download(coverUrl);
     } else {
       final resp = await _client
-          .get(Uri.parse(coverUrl), headers: const {'User-Agent': 'Mozilla/5.0'})
+          .get(
+            Uri.parse(coverUrl),
+            headers: const {'User-Agent': 'Mozilla/5.0'},
+          )
           .timeout(const Duration(seconds: 20));
       if (resp.statusCode != 200) return false;
       contentType = resp.headers['content-type'] ?? '';
@@ -228,10 +230,7 @@ class CoverRefresher extends ChangeNotifier {
 
   void _tell() {
     unawaited(
-      ImportForeground.updateTask(
-        title: '嘤阅 · 正在更新封面',
-        text: progressText,
-      ),
+      ImportForeground.updateTask(title: '嘤阅 · 正在更新封面', text: progressText),
     );
   }
 

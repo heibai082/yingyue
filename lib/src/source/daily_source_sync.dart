@@ -6,7 +6,6 @@
 //   - 新书源并入后立刻跑一次全量体检，连续失败 2 次的自动删除；
 //   - 整个过程走前台服务，通知栏能看到进度，切 App 也不停。
 import 'dart:async';
-import 'dart:convert';
 
 import '../data/prefs.dart';
 import '../data/app_activity.dart';
@@ -148,9 +147,7 @@ class DailySourceSync {
 
     void tell(String text) {
       onProgress?.call(text);
-      unawaited(
-        ImportForeground.updateTask(title: '嘤阅 · 正在同步书源', text: text),
-      );
+      unawaited(ImportForeground.updateTask(title: '嘤阅 · 正在同步书源', text: text));
     }
 
     try {
@@ -178,7 +175,9 @@ class DailySourceSync {
         for (final hub in _clients) {
           if (added + updated >= maxSourcesPerRun) break;
           hubIndex++;
-          final prefix = _clients.length > 1 ? '[$hubIndex/${_clients.length} ${hub.label}] ' : '';
+          final prefix = _clients.length > 1
+              ? '[$hubIndex/${_clients.length} ${hub.label}] '
+              : '';
           try {
             tell('$prefix检查有没有新条目…');
             final items = await hub.latest();
@@ -205,7 +204,8 @@ class DailySourceSync {
               final key = _seenKey(hub, item.id);
               try {
                 final list = await hub.collection(item.id);
-                final stamp = item.time?.millisecondsSinceEpoch ??
+                final stamp =
+                    item.time?.millisecondsSinceEpoch ??
                     DateTime.now().millisecondsSinceEpoch;
                 if (list.isEmpty) {
                   seen[key] = stamp;
@@ -277,7 +277,8 @@ class DailySourceSync {
           // 在看书就让路：不占网、不占 CPU，退出阅读页自动继续
           shouldPause: () => kReaderActive.value,
           checker: healthChecker,
-          onProgress: (c) => tell(c.running ? '体检中：${c.progressText}' : c.progressText),
+          onProgress: (c) =>
+              tell(c.running ? '体检中：${c.progressText}' : c.progressText),
         );
         tell('开始体检 ${store.enabledCount} 个书源…');
         await controller.run(keyword);
@@ -320,12 +321,18 @@ class DailySourceSync {
     String key,
   ) async {
     try {
-      final r = await repo.searchOne(source, key).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => SourceSearchResult(source: source, error: '超时'),
-      );
+      final r = await repo
+          .searchOne(source, key)
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () => SourceSearchResult(source: source, error: '超时'),
+          );
       if (r.error != null) {
-        return SourceCheckOutcome(ok: false, error: r.error, elapsedMs: r.elapsedMs);
+        return SourceCheckOutcome(
+          ok: false,
+          error: r.error,
+          elapsedMs: r.elapsedMs,
+        );
       }
       if (r.books.isEmpty) {
         return SourceCheckOutcome(

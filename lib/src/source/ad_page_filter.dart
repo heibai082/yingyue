@@ -1,4 +1,4 @@
-﻿// 漫画「广告页」过滤。
+// 漫画「广告页」过滤。
 //
 // 有的图片站在正文里插一张推广页（包子漫画就是：一张白底大字的「安装包子漫画 APP」
 // + 一堆二维码）。它和正文页混在同一个图片列表里，光看 URL 区分不出来，
@@ -197,13 +197,15 @@ List<String> dropAdPages(List<String> urls, Map<String, ImagePixels> sizes) {
   if (known.length < 3) return urls;
 
   final widths = [for (final px in known) px.width]..sort();
+  final heights = [for (final px in known) px.height]..sort();
   final median = widths[widths.length ~/ 2];
+  final medianHeight = heights[heights.length ~/ 2];
   final minWidth = widths.first;
 
   final kept = <String>[];
   for (final u in urls) {
     final px = sizes[u];
-    if (!_looksLikeAd(px, minWidth, median)) kept.add(u);
+    if (!_looksLikeAd(px, minWidth, median, medianHeight)) kept.add(u);
   }
   if (kept.length == urls.length) return urls;
   // 保护：至少留 2 张、且不能删过半（防止把整话都判成广告）
@@ -211,11 +213,14 @@ List<String> dropAdPages(List<String> urls, Map<String, ImagePixels> sizes) {
   return kept;
 }
 
-bool _looksLikeAd(ImagePixels? px, int minWidth, int median) {
+bool _looksLikeAd(ImagePixels? px, int minWidth, int median, int medianHeight) {
   if (px == null) return false;
   // 极小图：logo / 二维码 / 分隔条
   if (px.width < 300 || px.height < 120) return true;
-  if (px.ratio <= 0.55) return true; // 又宽又短的横幅
+  // 又宽又短的横幅：要么极端扁，要么明显比别人矮一大截
+  // （只是「略宽」的跨页彩图不动，避免误删）
+  if (px.ratio <= 0.4) return true;
+  if (px.ratio <= 0.55 && px.height < medianHeight * 0.5) return true;
   // 又窄又长的整页推广图
   if (px.width != minWidth) return false;
   if (px.width >= median * 0.95) return false;
@@ -228,6 +233,7 @@ bool _looksLikeAd(ImagePixels? px, int minWidth, int median) {
 /// 拿不准的一律保留。
 bool looksLikeAdUrl(String url) {
   final u = url.toLowerCase();
+  // 只留「很确定是广告」的命名；别用 `/app/` 这种宽泛规则（正常章节路径也可能带）
   if (u.contains('qrcode') || u.contains('qr_code') || u.contains('erweima')) {
     return true;
   }
@@ -236,8 +242,8 @@ bool looksLikeAdUrl(String url) {
   }
   if (u.contains('appdownload') ||
       u.contains('app_download') ||
-      u.contains('/app/') ||
-      u.contains('download-app')) {
+      u.contains('download-app') ||
+      u.contains('download_app')) {
     return true;
   }
   return false;

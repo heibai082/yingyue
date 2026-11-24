@@ -1,11 +1,10 @@
-﻿// 「源仓库同步」的结果记录：这次到底新加了哪些书源。
+// 「源仓库同步」的结果记录：这次到底新加了哪些书源。
 //
 // 为什么要落盘：同步是后台跑的（可能几分钟），结束时会话可能已经切走；
 // 用户回头想核对「加了什么」，得能翻到。文件在 App files 目录下。
 import 'dart:convert';
 import 'dart:io';
 
-import '../data/persistence.dart';
 import '../platform/native_bridge.dart';
 
 /// 一条新增书源记录。
@@ -28,11 +27,12 @@ class SourceSyncLogItem {
     'collection': collection,
   };
 
-  factory SourceSyncLogItem.fromJson(Map<dynamic, dynamic> m) => SourceSyncLogItem(
-    name: (m['name'] ?? '').toString(),
-    url: (m['url'] ?? '').toString(),
-    collection: (m['collection'] ?? '').toString(),
-  );
+  factory SourceSyncLogItem.fromJson(Map<dynamic, dynamic> m) =>
+      SourceSyncLogItem(
+        name: (m['name'] ?? '').toString(),
+        url: (m['url'] ?? '').toString(),
+        collection: (m['collection'] ?? '').toString(),
+      );
 }
 
 /// 最近一次同步的汇总。
