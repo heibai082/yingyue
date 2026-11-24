@@ -582,7 +582,7 @@ class _Actions extends StatelessWidget {
               book.finished
                   ? '重新阅读'
                   : started
-                  ? '继续阅读 · 第 ${book.safeChapterIndex + 1} 章'
+                  ? '继续阅读 · ${book.chapter?.title ?? '第 ${book.safeChapterIndex + 1} 章'}'
                   : '开始阅读',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,

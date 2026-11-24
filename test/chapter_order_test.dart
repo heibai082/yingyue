@@ -70,6 +70,37 @@ void main() {
     expect(looksNewestFirst(normalNovel), isFalse);
   });
 
+  group('上一话 / 下一话的方向', () {
+    List<ChapterRef> desc(int from, int to) => [
+      for (var s = from; s >= to; s--) _c(s),
+    ];
+
+    test('漫画（最新话在前）：上一话往索引 +1（更早），下一话 -1（更新）', () {
+      final chapters = desc(1186, 0); // 1186,1185,...,0
+      final idx = 1186 - 1151; // 第1152话（slot 1151）的位置
+      expect(chapterNumber(chapters[idx]), 1151);
+
+      expect(olderStep(chapters), 1);
+      final older = olderIndex(chapters, idx)!;
+      expect(chapterNumber(chapters[older]), 1150, reason: '上一话应该是第1151话');
+      final newer = newerIndex(chapters, idx)!;
+      expect(chapterNumber(chapters[newer]), 1152, reason: '下一话应该是第1153话');
+    });
+
+    test('小说（正序）：上一话 -1，下一话 +1', () {
+      final chapters = [for (var s = 0; s < 100; s++) _c(s)];
+      expect(olderStep(chapters), -1);
+      expect(chapterNumber(chapters[olderIndex(chapters, 10)!]), 9);
+      expect(chapterNumber(chapters[newerIndex(chapters, 10)!]), 11);
+    });
+
+    test('到头了就返回 null（按钮要置灰）', () {
+      final chapters = desc(10, 0);
+      expect(olderIndex(chapters, chapters.length - 1), isNull);
+      expect(newerIndex(chapters, 0), isNull);
+    });
+  });
+
   test('标题里只有「第N章」也能取到序号', () {
     final c = ChapterRef(title: '第 42 章 出发', href: 'https://x.com/ch/42');
     expect(chapterNumber(c), 42);

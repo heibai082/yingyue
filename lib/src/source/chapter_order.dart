@@ -75,3 +75,19 @@ bool looksNewestFirst(List<ChapterRef> chapters) {
   if (first == null || last == null) return false;
   return first > last;
 }
+
+/// 目录是「最新话在前」（漫画）时，往**更早**的话翻是索引 +1；
+/// 小说那种「第1章在前」的正序则是 -1。
+int olderStep(List<ChapterRef> chapters) => looksNewestFirst(chapters) ? 1 : -1;
+
+/// 更早一话的索引（越界返回 null）。
+int? olderIndex(List<ChapterRef> chapters, int index) {
+  final i = index + olderStep(chapters);
+  return (i >= 0 && i < chapters.length) ? i : null;
+}
+
+/// 更新一话的索引（越界返回 null）。
+int? newerIndex(List<ChapterRef> chapters, int index) {
+  final i = index - olderStep(chapters);
+  return (i >= 0 && i < chapters.length) ? i : null;
+}

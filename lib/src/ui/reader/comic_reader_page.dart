@@ -16,6 +16,7 @@ import '../../data/models.dart';
 import '../../data/prefs.dart';
 import '../../source/analyze_url.dart';
 import '../../source/models.dart';
+import '../../source/chapter_order.dart';
 import '../../source/comic_chapter_cache.dart';
 import '../../source/online_book_service.dart';
 
@@ -175,8 +176,10 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
     unawaited(_stripAdsInBackground(href, urls));
     // 默认往后缓存两章：看完这一话点「下一话」基本秒开
     if (widget.prefs.autoPrefetchChapters) {
+      final step = olderStep(book.chapters);
       for (var d = 1; d <= 2; d++) {
-        unawaited(_prefetch(index + d));
+        // 「下一话」的方向（漫画是索引 -1）
+        unawaited(_prefetch(index - step * d));
       }
     }
   }
@@ -230,15 +233,22 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
     }
   }
 
+  /// 漫画目录是「最新话在前」（降序），所以「上一话」是索引 +1、「下一话」是 -1。
+  /// 以前写死 ±1，结果上一话跑到更新的一话去了。
   void _prev() {
-    if (_chapterIndex <= 0) return;
-    unawaited(_load(_chapterIndex - 1));
+    final book = _book;
+    if (book == null) return;
+    final i = olderIndex(book.chapters, _chapterIndex);
+    if (i == null) return;
+    unawaited(_load(i));
   }
 
   void _next() {
     final book = _book;
-    if (book == null || _chapterIndex >= book.chapters.length - 1) return;
-    unawaited(_load(_chapterIndex + 1));
+    if (book == null) return;
+    final i = newerIndex(book.chapters, _chapterIndex);
+    if (i == null) return;
+    unawaited(_load(i));
   }
 
   Future<void> _openToc() async {
@@ -475,7 +485,9 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
         child: Row(
           children: [
             TextButton.icon(
-              onPressed: _chapterIndex > 0 ? _prev : null,
+              onPressed: olderIndex(book.chapters, _chapterIndex) == null
+                  ? null
+                  : _prev,
               icon: const Icon(Icons.chevron_left_rounded),
               label: const Text('上一话'),
             ),
@@ -488,7 +500,9 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
               ),
             ),
             TextButton.icon(
-              onPressed: _chapterIndex < last ? _next : null,
+              onPressed: newerIndex(book.chapters, _chapterIndex) == null
+                  ? null
+                  : _next,
               icon: const Icon(Icons.chevron_right_rounded),
               label: const Text('下一话'),
             ),
