@@ -164,6 +164,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               prefs: widget.prefs,
               bookId: book.id,
               source: comicSource,
+              // 用户点的是哪一话就开哪一话（不传的话会退回书里记的进度，
+              // 表现就是「点第1152话，打开却是最新那话」）
+              initialChapter: widget.chapterIndex,
             ),
           ),
         );
