@@ -1,4 +1,4 @@
-﻿import 'comic_reader_page.dart';
+import 'comic_reader_page.dart';
 import 'epub_document_page.dart';
 
 import 'dart:async';
@@ -378,6 +378,32 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       }
     } catch (e) {
       if (!mounted) return;
+      // 这一章其实是图片（漫画 / 图楼）：直接切到漫画页，别卡在「正文为空」
+      if (e is ComicChapterException) {
+        final book = _book;
+        final src = SourceStore.shared?.byUrl(book?.sourceUrl ?? '');
+        if (book != null && src != null) {
+          final chapter = _chapterIndex;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('这一章是图片，已切到漫画模式')),
+            );
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (_) => ComicReaderPage(
+                  store: widget.store,
+                  prefs: widget.prefs,
+                  bookId: book.id,
+                  source: src,
+                  initialChapter: chapter,
+                ),
+              ),
+            );
+          });
+          return;
+        }
+      }
       setState(() {
         _loading = false;
         _error = '$e';

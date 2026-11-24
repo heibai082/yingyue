@@ -9,6 +9,16 @@ import 'epub_parser.dart';
 import 'models.dart';
 import 'txt_parser.dart';
 
+/// 「这一章其实是图片」——上层据此切到漫画模式。
+class ComicChapterException implements Exception {
+  ComicChapterException(this.images);
+
+  final List<String> images;
+
+  @override
+  String toString() => 'ComicChapterException(${images.length} 张图)';
+}
+
 /// 章节内容读取接口。
 abstract class BookContent {
   Future<String> chapterText(int index);
@@ -165,7 +175,17 @@ class OnlineBookContent implements BookContent {
     }
     final text = await _service.fetchChapterText(source, href);
     if (text.trim().isEmpty) {
-      throw StateError('正文为空（站点可能拦截或改版）');
+      // 有些「章节」其实是图片（漫画 / 图楼）：文字抽不出来，但页面上有图。
+      // 这里先探一下图片，交给上层切到漫画模式，而不是直接报「正文为空」。
+      try {
+        final images = await _service.fetchComicImages(source, href);
+        if (images.isNotEmpty) throw ComicChapterException(images);
+      } catch (e) {
+        if (e is ComicChapterException) rethrow;
+      }
+      throw StateError(
+        '正文为空（站点可能拦截或改版）。如果这是漫画，请到「搜书」切到「漫画源」重新找这本书',
+      );
     }
     try {
       await file.parent.create(recursive: true);

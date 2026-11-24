@@ -1,4 +1,4 @@
-﻿// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
+// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
 //
 // 设计取舍：
 //   - 不做分页手势（左右滑），先做「一条长图往下滚」，和站点本身一致，
@@ -23,12 +23,16 @@ class ComicReaderPage extends StatefulWidget {
     required this.prefs,
     required this.bookId,
     required this.source,
+    this.initialChapter,
   });
 
   final BookStore store;
   final AppPrefs prefs;
   final String bookId;
   final BookSource source;
+
+  /// 从文字阅读器切过来时，指定从哪一话开始。
+  final int? initialChapter;
 
   @override
   State<ComicReaderPage> createState() => _ComicReaderPageState();
@@ -49,7 +53,7 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
   void initState() {
     super.initState();
     final book = _book;
-    _chapterIndex = book?.safeChapterIndex ?? 0;
+    _chapterIndex = widget.initialChapter ?? book?.safeChapterIndex ?? 0;
     unawaited(_load(_chapterIndex));
   }
 
