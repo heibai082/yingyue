@@ -1,4 +1,4 @@
-// 书源数据模型：与「阅读 3.0（Legado）」书源 JSON 格式兼容。
+﻿// 书源数据模型：与「阅读 3.0（Legado）」书源 JSON 格式兼容。
 //
 // - 字段命名与 Legado 完全一致（bookSourceUrl / ruleSearch / …）；
 // - 解析容错：空值、类型混用、未知字段都不抛异常；
@@ -458,6 +458,12 @@ class BookSource {
   final BookInfoRule? bookInfoRule;
   final TocRule? tocRule;
   final ContentRule? contentRule;
+
+  /// 图片（漫画）源：阅读 3.0 里 bookSourceType == 2。
+  bool get isComic => bookSourceType == 2;
+
+  /// 音频源：bookSourceType == 1（本 App 暂不支持播放）。
+  bool get isAudio => bookSourceType == 1;
 
   /// 未识别的顶层字段（导出时原样写回，保证向前兼容）。
   final Map<String, dynamic> extra;

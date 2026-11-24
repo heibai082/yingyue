@@ -1,3 +1,4 @@
+﻿import 'comic_reader_page.dart';
 import 'epub_document_page.dart';
 
 import 'dart:async';
@@ -145,6 +146,27 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     final book = _book;
+    // 漫画源：文字阅读器只会把 <img> 当标签剔掉，直接切到漫画页
+    final comicSource = SourceStore.shared?.byUrl(book?.sourceUrl ?? '');
+    if (book != null &&
+        book.format == BookFormat.online &&
+        comicSource != null &&
+        comicSource.isComic) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => ComicReaderPage(
+              store: widget.store,
+              prefs: widget.prefs,
+              bookId: book.id,
+              source: comicSource,
+            ),
+          ),
+        );
+      });
+      return;
+    }
     _chapterIndex = widget.chapterIndex ?? book?.safeChapterIndex ?? 0;
     _targetOffset = widget.charOffset ?? book?.charOffset ?? 0;
     WidgetsBinding.instance.addObserver(this);

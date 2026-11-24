@@ -459,4 +459,118 @@ class OnlineBookService {
 
   static bool _flag(dynamic v) =>
       v == true || v == 1 || v == 'true' || v == '1';
+
+  // ---------- 漫画（图片）章节 ----------
+
+  /// 抓一章漫画的图片地址列表。
+  ///
+  /// 阅读 3.0 的图片源里，正文规则通常返回「一串图片地址」或「一段带 <img> 的 HTML」，
+  /// 两种都认；规则什么都没给时，再从整页里挑疑似漫画图兜底。
+  Future<List<String>> fetchComicImages(
+    BookSource source,
+    String chapterUrl,
+  ) async {
+    final html = await _getHtml(source, chapterUrl);
+    final out = <String>[];
+    final rule = source.contentRule?.content ?? '';
+    if (rule.trim().isNotEmpty) {
+      try {
+        final engine = AnalyzeRule(html, baseUrl: source.bookSourceUrl);
+        for (final part in engine.getStrings(rule)) {
+          out.addAll(extractImageUrls(part, baseUrl: chapterUrl));
+        }
+      } catch (_) {
+        // 规则跑不动就交给兜底
+      }
+    }
+    if (out.isEmpty) {
+      out.addAll(extractImageUrls(html, baseUrl: chapterUrl));
+    }
+    // 去重但保留顺序（分页站点会有重复图）
+    final seen = <String>{};
+    return [
+      for (final url in out)
+        if (seen.add(url)) url,
+    ];
+  }
+
+  /// 从 HTML 或「一行一个地址」的文本里提取图片 URL（相对地址按 [baseUrl] 补全）。
+  ///
+  /// 过滤掉站点图标 / 占位图 / 追踪像素这些明显不是漫画的图。
+  static List<String> extractImageUrls(String source, {required String baseUrl}) {
+    final urls = <String>[];
+    final imgTag = RegExp(r'<img\b[^>]*>', caseSensitive: false);
+    if (imgTag.hasMatch(source)) {
+      // 懒加载站点常把真地址放 data-src，src 里是占位图 → 按优先级取
+      for (final m in imgTag.allMatches(source)) {
+        final tag = m.group(0)!;
+        for (final key in const [
+          'data-src',
+          'data-original',
+          'data-lazy-src',
+          'data-echo',
+          'src',
+        ]) {
+          final a = RegExp(
+            '$key\\s*=\\s*["\']([^"\']+)["\']',
+            caseSensitive: false,
+          ).firstMatch(tag);
+          if (a != null) {
+            urls.add(a.group(1)!);
+            break;
+          }
+        }
+      }
+    } else {
+      // 纯文本：按空白 / 换行 / || 拆
+      for (final piece in source.split(RegExp(r'[\s|,]+'))) {
+        if (_looksLikeImage(piece)) urls.add(piece);
+      }
+    }
+
+    final out = <String>[];
+    for (final raw in urls) {
+      final url = resolveUrl(raw.trim(), baseUrl);
+      if (url.isEmpty) continue;
+      if (!_looksLikeImage(url)) continue;
+      if (_isJunkImage(url)) continue;
+      out.add(url);
+    }
+    return out;
+  }
+
+  static bool _looksLikeImage(String s) {
+    if (s.isEmpty) return false;
+    final lower = s.toLowerCase();
+    if (lower.startsWith('data:')) return false;
+    if (lower.startsWith('javascript:')) return false;
+    if (RegExp(r'\.(jpe?g|png|webp|bmp|avif)(\?|$)').hasMatch(lower)) return true;
+    // CDN 上不带扩展名的也不少；只要像图片路径就放行
+    return lower.contains('/comic/') ||
+        lower.contains('/scomic/') ||
+        lower.contains('/manga/') ||
+        lower.contains('/chapter/');
+  }
+
+  /// 站点图标 / 占位图 / 广告追踪：不是漫画正文。
+  static bool _isJunkImage(String url) {
+    final lower = url.toLowerCase();
+    const junk = [
+      'icon',
+      'logo',
+      'avatar',
+      'favicon',
+      'placeholder',
+      'loading',
+      'blank.',
+      'spacer',
+      'pixel',
+      'spacer.gif',
+      '/static/',
+      '/ad/',
+      'stat.',
+    ];
+    if (lower.endsWith('.svg') || lower.endsWith('.gif')) return true;
+    return junk.any(lower.contains);
+  }
 }
