@@ -1,4 +1,4 @@
-// 漫画图片磁盘缓存的基础测试（缓存命中 = 真的秒开）。
+﻿// 漫画图片磁盘缓存的基础测试（缓存命中 = 真的秒开）。
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -30,7 +30,7 @@ void main() {
     final c = comicImageKey('https://img.example.com/a/2.jpg');
     expect(a, b);
     expect(a, isNot(c));
-    expect(a.length, 8);
+    expect(a.length, 17); // 'h' + 16 位 hash
 
     final f1 = comicImageCacheFile(
       store,

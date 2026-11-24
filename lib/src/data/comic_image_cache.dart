@@ -16,18 +16,15 @@ import 'package:flutter/material.dart';
 
 import '../source/http_client.dart';
 import 'book_store.dart';
+import 'chapter_cache.dart';
 
 /// 图片地址 → 稳定的短 hash（同一话同一张图永远落到同一个文件）。
-String comicImageKey(String url) {
-  var hash = 0x811c9dc5; // FNV-1a 32 位
-  for (final unit in url.codeUnits) {
-    hash ^= unit;
-    hash = (hash * 0x01000193) & 0xffffffff;
-  }
-  return hash.toRadixString(16).padLeft(8, '0');
-}
+///
+/// 和章节正文用同一套 hash（[ChapterCache.fnv64]），这样「这一话的图片目录」
+/// 和「这一话的正文文件」天然属于同一本书、同一章。
+String comicImageKey(String url) => 'h${ChapterCache.fnv64(url)}';
 
-/// 一话的图片目录：<书籍缓存>/img/<章节 hash>/
+/// 一话的图片目录：`<书籍缓存>/img/<章节 hash>/`
 Directory comicChapterImageDir(BookStore store, String bookId, String href) =>
     Directory(
       '${store.chapterCacheDir(bookId).path}/img/${comicImageKey(href)}',

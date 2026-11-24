@@ -154,24 +154,14 @@ class OnlineBookContent implements BookContent {
   final OnlineBookService _service = OnlineBookService();
   final Map<int, String> _memo = {};
 
-  /// 缓存文件名带 v2 前缀：旧版本曾把「站点导航整页文本」当作正文缓存下来，
-  /// 换名后老缓存自然失效，重新抓取即可得到干净正文。
-  File _cacheFile(int index) => File(
-    '${store.chapterCacheDir(book.id).path}/'
-    'ch_v2_${index.toString().padLeft(4, '0')}.txt',
-  );
-
-  /// 只有真的落过盘（文件非空）才算命中；内存里的 memo 也算。
+  /// 缓存文件的命名 / 位置统一由 BookStore + ChapterCache 决定：
+  /// 存在**持久**目录里（不是系统缓存目录），文件名按章节链接算，
+  /// 所以升级、清理、目录插新章都不会让缓存失效。
   @override
   bool isCached(int index) {
     if (index < 0 || index >= book.chapters.length) return false;
     if (_memo.containsKey(index)) return true;
-    try {
-      final f = _cacheFile(index);
-      return f.existsSync() && f.lengthSync() > 0;
-    } catch (_) {
-      return false;
-    }
+    return store.hasCachedChapter(book, index);
   }
 
   @override
@@ -188,12 +178,9 @@ class OnlineBookContent implements BookContent {
   }
 
   Future<String> _load(int index) async {
-    final file = _cacheFile(index);
     try {
-      if (await file.exists()) {
-        final cached = await file.readAsString();
-        if (cached.isNotEmpty) return cached;
-      }
+      final cached = await store.readCachedChapter(book, index);
+      if (cached != null) return cached;
     } catch (_) {}
 
     final sourceUrl = book.sourceUrl;
@@ -223,8 +210,12 @@ class OnlineBookContent implements BookContent {
       throw StateError('正文为空（站点可能拦截或改版）。如果这是漫画，请到「搜书」切到「漫画源」重新找这本书');
     }
     try {
-      await file.parent.create(recursive: true);
-      await file.writeAsString(text, flush: requireCacheWrite);
+      await store.writeCachedChapter(
+        book,
+        index,
+        text,
+        flush: requireCacheWrite,
+      );
     } catch (_) {
       if (requireCacheWrite) rethrow;
     }

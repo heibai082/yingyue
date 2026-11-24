@@ -241,9 +241,9 @@ void main() {
       addTearDown(content.dispose);
 
       expect(content.isCached(0), isFalse);
-      _writeCache(store.chapterCacheDir('hit'), 0, '');
+      await store.writeCachedChapter(book, 0, '');
       expect(content.isCached(0), isFalse, reason: '0 字节不算');
-      _writeCache(store.chapterCacheDir('hit'), 0, '正文');
+      await store.writeCachedChapter(book, 0, '正文');
       expect(content.isCached(0), isTrue);
       expect(content.isCached(1), isFalse);
       expect(content.isCached(-1), isFalse);
@@ -264,21 +264,25 @@ void main() {
 
   group('CacheTracker：抓新章 → 下好 → 才并入目录', () {
     late BookStore store;
-    late Directory cacheDir;
+    late Directory tmp;
 
-    setUp(() {
-      store = BookStore();
-      cacheDir = store.chapterCacheDir('tracked');
+    // 每个用例独立目录：缓存按「章节链接」存，共用目录会互相污染
+    setUp(() async {
+      tmp = await Directory.systemTemp.createTemp('sakura_tracker');
+      store = BookStore(
+        dirsOverride: AppDirs(files: tmp.path, cache: tmp.path),
+      );
+      await store.load();
     });
 
     tearDown(() async {
-      try {
-        if (await cacheDir.exists()) await cacheDir.delete(recursive: true);
-      } catch (_) {}
       store.dispose();
+      try {
+        await tmp.delete(recursive: true);
+      } catch (_) {}
     });
 
-    /// 假内容：把正文写进缓存目录（和 OnlineBookContent 落盘的文件名一致）。
+    /// 假内容：把正文写进缓存（走 BookStore.writeCachedChapter，和真实落盘一致）。
     OfflineDownloader fakeDownloader({int failAt = -1}) => OfflineDownloader(
       contentFactory: (book, s) => _WritingContent(book, s, failAt: failAt),
     );
@@ -287,7 +291,7 @@ void main() {
       final book = _novel(3, id: 'tracked');
       store.addOnline(book);
       for (var i = 0; i < 3; i++) {
-        _writeCache(cacheDir, i, '正文$i');
+        await _writeCache(store, book, i, '正文$i');
       }
 
       final tracker = CacheTracker(
@@ -361,7 +365,7 @@ void main() {
     test('抓目录失败不致命：按原计划把缺的章补上', () async {
       final book = _novel(4, id: 'tracked');
       store.addOnline(book);
-      _writeCache(cacheDir, 0, '正文0');
+      await _writeCache(store, book, 0, '正文0');
 
       final tracker = CacheTracker(
         store: store,
@@ -407,13 +411,10 @@ class _WritingContent extends BookContent {
   Future<String> chapterText(int index) async {
     if (index == failAt) throw StateError('网络错误');
     final text = '第 ${index + 1} 章正文';
-    _writeCache(store.chapterCacheDir(book.id), index, text);
+    await _writeCache(store, book, index, text);
     return text;
   }
 }
 
-void _writeCache(Directory dir, int index, String text) {
-  dir.createSync(recursive: true);
-  File('${dir.path}/ch_v2_${index.toString().padLeft(4, '0')}.txt')
-      .writeAsStringSync(text);
-}
+Future<void> _writeCache(BookStore store, Book book, int index, String text) =>
+    store.writeCachedChapter(book, index, text);

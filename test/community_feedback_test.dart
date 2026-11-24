@@ -130,6 +130,25 @@ void main() {
       final dirs = AppDirs(files: tmp.path, cache: tmp.path);
       store = BookStore(dirsOverride: dirs);
       await store.load();
+      // 缓存按「章节链接」命名，需要书本身在书架里
+      for (final id in ['book1', 'book2']) {
+        store.addOnline(
+          Book(
+            id: id,
+            title: id,
+            format: BookFormat.online,
+            path: 'https://example.com/$id',
+            sourceUrl: 'https://example.com/source',
+            chapters: [
+              for (var i = 0; i < 5; i++)
+                ChapterRef(
+                  title: '第 ${i + 1} 章',
+                  href: 'https://example.com/$id/$i',
+                ),
+            ],
+          ),
+        );
+      }
     });
 
     tearDown(() async {
@@ -139,28 +158,30 @@ void main() {
     });
 
     /// 写一个章节缓存文件（模拟已抓取）。
+    ///
+    /// 0.44 起缓存按「章节链接」命名并放在持久目录里（见 ChapterCache），
+    /// 所以测试也走 store.writeCachedChapter，而不是手拼文件名。
     Future<void> writeChapter(
       String bookId,
       int index, [
       String text = '正文',
     ]) async {
-      final dir = store.chapterCacheDir(bookId);
-      await dir.create(recursive: true);
-      await File('${dir.path}/ch_v2_${index.toString().padLeft(4, '0')}.txt')
-          .writeAsString(text);
+      final book = store.byId(bookId)!;
+      await store.writeCachedChapter(book, index, text);
     }
 
     test('未缓存 → 0 章', () async {
       expect(await store.cachedChapterCount('book1'), 0);
     });
 
-    test('写入后能正确统计（只算 ch_v2_* 且非空）', () async {
+    test('写入后能正确统计（只算真缓存、非空）', () async {
       await writeChapter('book1', 0);
       await writeChapter('book1', 1);
       // 空文件不算（抓取失败留下的空壳）
       await writeChapter('book1', 2, '');
       // 非章节文件也不算
       final dir = store.chapterCacheDir('book1');
+      await dir.create(recursive: true);
       await File('${dir.path}/other.txt').writeAsString('x');
 
       expect(await store.cachedChapterCount('book1'), 2);
