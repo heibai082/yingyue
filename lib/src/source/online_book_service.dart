@@ -17,6 +17,7 @@ import 'package:html/parser.dart' as html_parser;
 import '../data/models.dart';
 import 'ad_page_filter.dart';
 import 'analyze_rule.dart';
+import 'chapter_order.dart';
 import 'analyze_url.dart';
 import 'http_client.dart';
 import 'models.dart';
@@ -90,6 +91,10 @@ class OnlineBookService {
     } else {
       chapters = await _followTocPages(source, engine, bookUrl, chapters);
     }
+
+    // 目录归一化：漫画源的站点会把「最新几话」在目录最前面再列一遍，
+    // 拼起来就重复 + 索引错位（点第1152话却显示 1177/1187）。
+    chapters = normalizeChapterOrder(chapters, newestFirst: source.isComic);
 
     return OnlineBookInfo(
       name: g(info?.name),
