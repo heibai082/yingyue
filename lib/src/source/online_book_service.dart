@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:html/parser.dart' as html_parser;
 
 import '../data/models.dart';
+import 'ad_page_filter.dart';
 import 'analyze_rule.dart';
 import 'analyze_url.dart';
 import 'http_client.dart';
@@ -548,7 +549,27 @@ class OnlineBookService {
       }
     }
     debugPrint('[comic] total=${urls.length}');
-    return filterChapterImages(urls, chapterUrl);
+    final kept = filterChapterImages(urls, chapterUrl);
+    return await _dropAdPages(kept);
+  }
+
+  static final ImageProbe _probe = ImageProbe();
+
+  /// 去掉正文里插的「推广页」（站点生成的二维码长图）。
+  ///
+  /// 只取每张图的前 24 KB 读尺寸，探测失败就原样返回，绝不误删正文。
+  static Future<List<String>> _dropAdPages(List<String> urls) async {
+    if (urls.length < 4) return urls;
+    try {
+      final sizes = await _probe.probe(urls);
+      final kept = dropAdPages(urls, sizes);
+      if (kept.length != urls.length) {
+        debugPrint('[comic] adPages=${urls.length - kept.length}');
+      }
+      return kept;
+    } catch (_) {
+      return urls;
+    }
   }
 
   /// 收尾过滤：广告 / 封面墙 / 别的漫画的推广图都不算这一话的正文。
