@@ -353,6 +353,13 @@ class SourceStore extends ChangeNotifier with ReliablePersistence {
     return const JsonEncoder.withIndent('  ').convert(list);
   }
 
+  /// 只导出一条书源（同样是数组格式，另一台手机「粘贴导入」直接能用）。
+  String exportOneJson(String bookSourceUrl) {
+    final s = byUrl(bookSourceUrl);
+    if (s == null) return '[]';
+    return const JsonEncoder.withIndent('  ').convert([s.toJson()]);
+  }
+
   /// 立即落盘（测试与退出前调用；平时是防抖保存）。
   Future<void> flush() {
     _saveTimer?.cancel();

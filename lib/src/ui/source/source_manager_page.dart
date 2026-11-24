@@ -12,6 +12,7 @@ import '../../util/format.dart';
 import '../folder_picker_page.dart';
 import '../widgets/cute.dart';
 import '../../platform/url_launcher.dart';
+import '../../platform/share_service.dart';
 
 class SourceManagerPage extends StatefulWidget {
   const SourceManagerPage({super.key, required this.store});
@@ -372,6 +373,28 @@ class _SourceManagerPageState extends State<SourceManagerPage> {
                     },
                     icon: const Icon(Icons.copy_rounded, size: 18),
                     label: const Text('复制地址'),
+                  ),
+                  // 只分享这一条：序列化成「阅读 3.0」数组，另一台手机
+                  // 书源管理 → ＋ → 粘贴导入 就能收到
+                  FilledButton.tonalIcon(
+                    onPressed: () async {
+                      final json = store.exportOneJson(s.bookSourceUrl);
+                      final ok = await shareText(
+                        json,
+                        title: '分享书源：${s.bookSourceName}',
+                      );
+                      if (!ctx.mounted) return;
+                      if (ok) return;
+                      await Clipboard.setData(ClipboardData(text: json));
+                      if (!ctx.mounted) return;
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        const SnackBar(
+                          content: Text('没有可用的分享应用，已把这个源的 JSON 复制到剪贴板'),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.share_rounded, size: 18),
+                    label: const Text('分享这个源'),
                   ),
                   OutlinedButton.icon(
                     onPressed: () {

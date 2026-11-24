@@ -3,13 +3,16 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../data/book_store.dart';
 import '../data/models.dart';
 import '../data/offline_downloader.dart';
 import '../data/prefs.dart';
+import '../platform/share_service.dart';
 import '../source/source_store.dart';
 import '../theme/app_theme.dart';
+import '../util/book_share.dart';
 import 'reader/reader_page.dart';
 import 'folder_picker_page.dart';
 import 'source/source_switch_sheet.dart';
@@ -182,7 +185,11 @@ class _BookDetailPageState extends State<BookDetailPage> {
           body: CustomScrollView(
             slivers: [
               SliverToBoxAdapter(
-                child: _Header(book: book, store: store),
+                child: _Header(
+                  book: book,
+                  store: store,
+                  onShare: () => _shareBook(book),
+                ),
               ),
               SliverToBoxAdapter(
                 child: Padding(
@@ -295,6 +302,36 @@ class _BookDetailPageState extends State<BookDetailPage> {
   }
 
   /// 在线书换源：自动搜索候选 → 选择 → 切换（保留阅读进度）。
+  /// 分享这本书：书名 + 作者 + 书源 + 书籍地址，另一台手机照着做就能打开。
+  Future<void> _shareBook(Book book) async {
+    final sourceStore = SourceStore.shared;
+    String? sourceName;
+    if (sourceStore != null && book.sourceUrl != null) {
+      for (final s in sourceStore.sources) {
+        if (s.bookSourceUrl == book.sourceUrl) {
+          sourceName = s.bookSourceName;
+          break;
+        }
+      }
+    }
+    final isOnline = book.format == BookFormat.online;
+    final text = buildBookShareText(
+      title: book.title,
+      author: book.author,
+      sourceName: sourceName,
+      sourceUrl: book.sourceUrl,
+      bookUrl: isOnline ? book.path : null,
+      isOnline: isOnline,
+    );
+    final ok = await shareText(text, title: '分享这本书');
+    if (!mounted) return;
+    if (ok) return;
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('没有可用的分享应用，已复制到剪贴板')));
+  }
+
   Future<void> _switchSource(BuildContext context, Book book) async {
     final sourceStore = SourceStore.shared;
     if (sourceStore == null) return;
@@ -312,10 +349,15 @@ class _BookDetailPageState extends State<BookDetailPage> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.book, required this.store});
+  const _Header({
+    required this.book,
+    required this.store,
+    required this.onShare,
+  });
 
   final Book book;
   final BookStore store;
+  final VoidCallback onShare;
 
   @override
   Widget build(BuildContext context) {
@@ -357,9 +399,22 @@ class _Header extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              IconButton(
-                onPressed: () => Navigator.of(context).pop(),
-                icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+              Row(
+                children: [
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(
+                      Icons.arrow_back_rounded,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: '分享这本书',
+                    onPressed: onShare,
+                    icon: const Icon(Icons.share_rounded, color: Colors.white),
+                  ),
+                ],
               ),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,

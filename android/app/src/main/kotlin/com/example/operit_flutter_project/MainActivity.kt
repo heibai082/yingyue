@@ -144,6 +144,32 @@ class MainActivity : FlutterActivity() {
                     map["cache"] = cacheDir.absolutePath
                     result.success(map)
                 }
+                // 分享一段文本（书源 JSON 之类）：调系统分享面板，微/QQ/蓝牙都能收
+                "shareText" -> {
+                    val args = call.arguments as? Map<*, *>
+                    val text = args?.get("text") as? String
+                    val title = args?.get("title") as? String ?: "分享"
+                    if (text.isNullOrEmpty()) {
+                        result.success(false)
+                    } else {
+                        val ok = try {
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, text)
+                                putExtra(Intent.EXTRA_SUBJECT, title)
+                            }
+                            val chooser = Intent.createChooser(send, title).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(chooser)
+                            true
+                        } catch (e: Exception) {
+                            Log.w("sakuraread", "shareText failed: ${e.message}")
+                            false
+                        }
+                        result.success(ok)
+                    }
+                }
                 "getBattery" -> {
                     val intent = registerReceiver(
                         null as android.content.BroadcastReceiver?,
