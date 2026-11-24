@@ -867,6 +867,7 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
 
   @override
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
     _saveTimer?.cancel();
     unawaited(flush().catchError((Object _) {}));

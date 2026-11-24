@@ -1,7 +1,8 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../source/models.dart' show BookSource;
 import '../source/online_book_service.dart';
 import '../source/source_store.dart';
 import 'book_store.dart';
@@ -188,7 +189,10 @@ class OnlineBookContent implements BookContent {
         ? null
         : SourceStore.shared?.byUrl(sourceUrl);
     if (source == null) {
-      throw StateError('书源缺失（${sourceUrl ?? '未知'}），可能已被删除');
+      throw StateError(
+        '这一章还没缓存，书源也不在本机（${sourceUrl ?? '未知'}，可能已被删除）。\n'
+        '联网后打开这一章会自动存下来，之后断网也能看。',
+      );
     }
     final chapter = book.chapters[index];
     final href = (chapter.href ?? '').trim();
@@ -197,7 +201,7 @@ class OnlineBookContent implements BookContent {
         '章节缺少链接（第 ${readingChapterNumber(book.chapters, index)} 章）',
       );
     }
-    final text = await _service.fetchChapterText(source, href);
+    final text = await _fetchOrExplain(source, href, index);
     if (text.trim().isEmpty) {
       // 有些「章节」其实是图片（漫画 / 图楼）：文字抽不出来，但页面上有图。
       // 这里先探一下图片，交给上层切到漫画模式，而不是直接报「正文为空」。
@@ -220,6 +224,19 @@ class OnlineBookContent implements BookContent {
       if (requireCacheWrite) rethrow;
     }
     return text;
+  }
+
+  /// 联网取正文；失败时说清楚「是不是还没缓存」——断网时最需要这句话。
+  Future<String> _fetchOrExplain(dynamic source, String href, int index) async {
+    try {
+      return await _service.fetchChapterText(source, href);
+    } catch (e) {
+      throw StateError(
+        '这一章还没缓存，现在也抓不到正文（没网 / 站点拦截 / 改版）。\n'
+        '之前缓存过的章节断网也能看；联网后打开这一章，就会自动存下来。\n'
+        '（原因：$e）',
+      );
+    }
   }
 
   @override

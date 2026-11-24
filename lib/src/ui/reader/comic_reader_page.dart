@@ -1,4 +1,4 @@
-// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
+﻿// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
 //
 // 设计取舍：
 //   - 不做分页手势（左右滑），先做「一条长图往下滚」，和站点本身一致，
@@ -175,7 +175,12 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
       setState(() {
         _loading = false;
         // ComicUnavailable 自带给读者看的解释，别再加一层「加载失败」
-        _error = e is ComicUnavailable ? '$e' : '加载失败：$e';
+        final base = e is ComicUnavailable ? '$e' : '加载失败：$e';
+        _error = _chapterCache[href] == null
+            // 这一话从没缓存过：断网时最需要知道「怎么办」
+            ? '$base\n\n这一话还没缓存。联网时打开一次会自动存到本机，'
+                  '之后断网也能看（已缓存的章节直接秒开）。'
+            : base;
       });
     }
   }
