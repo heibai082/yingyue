@@ -155,6 +155,121 @@ class WebViewEngine {
     });
   }
 
+  /// 打开 [url]，等页面把图片渲染出来，返回大图的地址列表。
+  ///
+  /// 用途：图片站（腾讯动漫、B 漫这类）的章节图是 JS 拉接口后再塞进 `<img>` 的，
+  /// 光看 HTML 只有占位符，必须让真浏览器跑一遍脚本再从 DOM 里取。
+  Future<List<String>> fetchRenderedImages({
+    required String url,
+    Duration totalWait = const Duration(seconds: 30),
+    Duration pollInterval = const Duration(milliseconds: 550),
+  }) {
+    return _enqueue(() async {
+      final c = ensureController();
+      await _ensureWarm(c);
+
+      final done = Completer<void>();
+      _pageFinished = done;
+      try {
+        await c.loadRequest(Uri.parse(url));
+      } catch (_) {}
+      await done.future.timeout(const Duration(seconds: 15), onTimeout: () {});
+      _pageFinished = null;
+
+      const js = '''
+(function(){
+  try {
+    var out = [];
+    var nodes = document.querySelectorAll('img,amp-img,image,source') || [];
+    for (var i = 0; i < nodes.length; i++) {
+      var im = nodes[i];
+      var src = im.currentSrc || im.src || im.getAttribute('src') || '';
+      var lazy = im.getAttribute('data-src') || im.getAttribute('data-original')
+              || im.getAttribute('data-lazy') || im.getAttribute('data-echo') || '';
+      var ok = function (u) {
+        return !!u && u.indexOf('{{') < 0 && u.indexOf('data:') !== 0;
+      };
+      var pick = ok(src) ? src : (ok(lazy) ? lazy : '');
+      if (!pick) continue;
+      var w = im.naturalWidth || im.width || 0;
+      var h = im.naturalHeight || im.height || 0;
+      // 图标 / logo / 追踪像素：宽高都拿到了还很小就丢
+      if (w > 0 && h > 0 && (w < 200 || h < 200)) continue;
+      out.push(pick);
+    }
+    var doc = document.documentElement || {};
+    var body = document.body || doc;
+    return JSON.stringify({
+      imgs: out,
+      y: window.pageYOffset || doc.scrollTop || 0,
+      vh: window.innerHeight || 0,
+      h: Math.max(body.scrollHeight || 0, doc.scrollHeight || 0)
+    });
+  } catch (e) { return JSON.stringify({imgs: [], y: 0, vh: 0, h: 0}); }
+})()
+''';
+      final deadline = DateTime.now().add(totalWait);
+      final seen = <String>{};
+      var idleRounds = 0;
+      var bottomRounds = 0;
+      var emptyRounds = 0;
+      while (DateTime.now().isBefore(deadline)) {
+        var st = <String, dynamic>{};
+        try {
+          final raw = await c.runJavaScriptReturningResult(js);
+          final text = _decodeJsString(raw);
+          if (text.trim().isNotEmpty) {
+            final decoded = jsonDecode(text);
+            if (decoded is Map) st = Map<String, dynamic>.from(decoded);
+          }
+        } catch (_) {
+          // 页面还在跳转：这一轮当作没数据，下一轮再来
+        }
+        final before = seen.length;
+        final imgs = st['imgs'];
+        if (imgs is List) {
+          for (final u in imgs) {
+            if (u is String && u.isNotEmpty) seen.add(u);
+          }
+        }
+        final h = (st['h'] as num?)?.toDouble() ?? 0;
+        final vh = (st['vh'] as num?)?.toDouble() ?? 0;
+        final y = (st['y'] as num?)?.toDouble() ?? 0;
+        if (seen.length == before) {
+          idleRounds++;
+        } else {
+          idleRounds = 0;
+        }
+        final atBottom = h > 0 && y + vh >= h - 8;
+        if (atBottom) {
+          bottomRounds++;
+        } else {
+          bottomRounds = 0;
+        }
+        if (seen.isEmpty) {
+          emptyRounds++;
+        } else {
+          emptyRounds = 0;
+        }
+        // 连续十几轮一张图都没有（≈7 秒）：多半是整章要登录/会员，
+        // 或者站点只给网页版留了导流图，别让读者干等满 30 秒。
+        if (emptyRounds >= 12) break;
+        // 滚到底了、而且连续两轮没新图 → 这一话收完了
+        if (bottomRounds >= 2 && idleRounds >= 1) break;
+        // 一次只滚大半屏：懒加载的图要真进视口才会填 src；
+        // 直接跳到 document.body.scrollHeight 会漏掉中间那几张。
+        final next = atBottom ? h : y + (vh > 0 ? vh * 0.75 : 600);
+        try {
+          await c.runJavaScriptReturningResult(
+            'window.scrollTo(0, ${next.toStringAsFixed(0)});',
+          );
+        } catch (_) {}
+        await Future<void>.delayed(pollInterval);
+      }
+      return seen.toList();
+    });
+  }
+
   /// 把平台返回的结果解码为字符串（Android 侧是 JSON 编码的字符串）。
   static String _decodeJsString(Object? raw) {
     if (raw == null) return '';

@@ -194,22 +194,45 @@ String _normalizeSelector(String p) {
   return p;
 }
 
+/// 「多 class」写法归一化：`class.a b c` → `.a.b.c`。
+///
+/// 阅读 3.0 里 `class.a b c` 的意思是「同时带 a、b、c 这三个 class」，
+/// 而 CSS 里空格是后代选择器，`package:html` 遇到裸词直接报错 → 结果为空。
+/// 包子漫画这类源的搜索/目录规则全是这种写法，归一化后才能真正选到元素。
+///
+/// 只处理「第一个 token 带点、后面全是裸词」的情况：裸词在合法 CSS 里不会出现，
+/// 所以不会把 `.list .item` 这种真后代选择器改坏。
+String _foldMultiClass(String selector) {
+  final s = selector.trim();
+  if (!s.contains(' ')) return s;
+  final parts = s.split(RegExp(r'\s+'));
+  if (parts.length < 2 || !parts.first.startsWith('.')) return s;
+  final bare = RegExp(r'^[A-Za-z_][\w-]*$');
+  for (final t in parts.skip(1)) {
+    if (!bare.hasMatch(t)) return s;
+    if (_isBareTag(t)) return s; // `div span` 这类：真是后代选择器
+    if (_extractorKeywords.contains(t)) return s; // text / href 不是 class
+  }
+  return parts.first + parts.skip(1).map((t) => '.$t').join();
+}
+
 /// 解析 HTML 文本为文档对象（容错）。
 dom.Document parseHtml(String html) => html_parser.parse(html);
 
 /// 在上下文节点（Document 或 Element）内执行 CSS 元素选择。
 List<dom.Element> selectElements(dom.Node context, String selector) {
+  final sel = _foldMultiClass(selector);
   try {
-    if (!selector.contains(':contains(') && !selector.contains(':has(')) {
+    if (!sel.contains(':contains(') && !sel.contains(':has(')) {
       if (context is dom.Document) {
-        return context.querySelectorAll(selector);
+        return context.querySelectorAll(sel);
       }
       if (context is dom.Element) {
-        return context.querySelectorAll(selector);
+        return context.querySelectorAll(sel);
       }
       return const [];
     }
-    return _selectWithPseudo(context, selector);
+    return _selectWithPseudo(context, sel);
   } catch (_) {
     // 选择器语法不支持：返回空结果（与“找不到元素”同语义）
     return const [];

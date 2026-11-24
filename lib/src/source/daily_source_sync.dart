@@ -75,6 +75,8 @@ class DailySourceSync {
     List<SourceHubClient>? clients,
     this.checker,
     this.window = const Duration(hours: 24),
+    this.bootstrapWindow = const Duration(days: 2),
+    this.bootstrapFallbackCount = 3,
     this.maxSourcesPerRun = 400,
     this.keyword = '西游记',
     this.healthConcurrency = 3,
@@ -94,6 +96,12 @@ class DailySourceSync {
 
   /// 只认这个时间窗内发布的条目（固定 24 小时：超过一天的都不要）。
   final Duration window;
+
+  /// 书架里一个源都没有时（新机 / 刚清空）的引导窗口：放宽到 2 天。
+  final Duration bootstrapWindow;
+
+  /// 引导时连 2 天内都没有新条目，就无条件拿最新的这几条，保证能用。
+  final int bootstrapFallbackCount;
 
   /// 单次最多并入多少个书源（防止一口气塞进几千个死源）。
   final int maxSourcesPerRun;
@@ -161,6 +169,10 @@ class DailySourceSync {
       final addedItems = <SourceSyncLogItem>[];
       var hubError = '';
       if (fetchNew) {
+        // 一个源都没有（新机 / 刚清空）：先按「2 天」宽窗口补一份基础书源，
+        // 否则严格 24 小时会让新设备一本书都搜不到。
+        final bootstrap = store.sources.isEmpty;
+        if (bootstrap) tell('书架还没有书源，先补一批基础源…');
         // 多个源仓库：一个个来，单个站点挂了不影响其它站点
         var hubIndex = 0;
         for (final hub in _clients) {
@@ -170,9 +182,11 @@ class DailySourceSync {
           try {
             tell('$prefix检查有没有新条目…');
             final items = await hub.latest();
-            // 固定 24 小时窗口：超过一天的都不要（用户明确要求的）
-            final cutoff = DateTime.now().subtract(window);
-            final fresh = items.where((i) {
+            // 日常：固定 24 小时窗口；引导：放宽到 2 天
+            final cutoff = DateTime.now().subtract(
+              bootstrap ? bootstrapWindow : window,
+            );
+            var fresh = items.where((i) {
               final key = _seenKey(hub, i.id);
               final prev = seen[key];
               if (prev == null) return i.isNewerThan(cutoff);
@@ -180,6 +194,11 @@ class DailySourceSync {
               return i.time != null &&
                   i.time!.millisecondsSinceEpoch > prev + 60000;
             }).toList();
+            // 2 天内也没有新条目：无条件拿最新的几条，保证新机能用
+            if (bootstrap && fresh.isEmpty && items.isNotEmpty) {
+              fresh = items.take(bootstrapFallbackCount).toList();
+              tell('$prefix最近没有新条目，先拿最新的 ${fresh.length} 条');
+            }
             for (final item in fresh) {
               if (added + updated >= maxSourcesPerRun) break;
               tell('$prefix正在下载《${item.title}》…');

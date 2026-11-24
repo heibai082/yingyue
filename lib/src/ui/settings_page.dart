@@ -21,6 +21,7 @@ import '../util/format.dart';
 import 'ai_chat_page.dart';
 import 'ai_settings_page.dart';
 import 'backup_page.dart';
+import 'comic_debug_page.dart';
 import 'legado_import_page.dart';
 import 'reader/reader_page.dart';
 import 'reader/reader_settings_panel.dart';
@@ -1025,9 +1026,13 @@ class _SettingsPageState extends State<SettingsPage> {
                     animation: widget.sourceStore,
                     builder: (_, _) {
                       final deleted = widget.sourceStore.deletedTodayCount;
+                      final empty = widget.sourceStore.sources.isEmpty;
                       return Text(
-                        '下载源仓库 24 小时内的新合集并并入书源，不体检；后台跑，不挡操作'
-                        '${deleted > 0 ? '\n今天删过 $deleted 个，同步时不会再加回来' : ''}',
+                        empty
+                            ? '书架还没有书源：第一次会先补最近 2 天的一批作为基础源；'
+                                  '之后只拉 24 小时内的新合集'
+                            : '下载源仓库 24 小时内的新合集并并入书源，不体检；后台跑，不挡操作'
+                                  '${deleted > 0 ? '\n今天删过 $deleted 个，同步时不会再加回来' : ''}',
                         style: const TextStyle(fontSize: 12),
                       );
                     },
@@ -1059,6 +1064,22 @@ class _SettingsPageState extends State<SettingsPage> {
                       builder: (_) =>
                           SourceHealthPage(store: widget.sourceStore),
                     ),
+                  ),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.bug_report_outlined),
+                  title: const Text(
+                    '漫画取图调试',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  subtitle: const Text(
+                    '给一个漫画章节地址，看能不能取到图（排查 JS 源用）',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const ComicDebugPage()),
                   ),
                 ),
               ],

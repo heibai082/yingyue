@@ -200,8 +200,11 @@ void main() {
     });
 
     test('非首次运行：超过 24 小时的合集不导入', () async {
-      // 模拟昨天同步过 → 走日常 24h 窗口
+      // 模拟昨天同步过 + 已有书源 → 走日常 24h 窗口
       prefs.setSourceSyncDay('2026-11-21');
+      store.addAll([
+        BookSource(bookSourceUrl: 'https://seed1.example.com', bookSourceName: '种子源'),
+      ]);
       final sync = DailySourceSync(
         store: store,
         prefs: prefs,
@@ -211,7 +214,7 @@ void main() {
       final report = await sync.runIfDue();
       expect(report.ran, isTrue);
       expect(report.newCollections, 0);
-      expect(store.sources, isEmpty);
+      expect(store.sources, hasLength(1), reason: '只有种子源，不该导入新的');
     });
 
     test('同一天第二次打开不再自动跑；force 也不重复下载已处理合集', () async {
@@ -257,7 +260,10 @@ void main() {
       expect(store.sources, isEmpty);
     });
 
-    test('第一次运行也只认 24 小时：三天前的合集不导入', () async {
+    test('已有书源时只认 24 小时：三天前的合集不导入', () async {
+      store.addAll([
+        BookSource(bookSourceUrl: 'https://seed2.example.com', bookSourceName: '种子源'),
+      ]);
       final sync = DailySourceSync(
         store: store,
         prefs: prefs,
@@ -266,7 +272,7 @@ void main() {
       );
       final report = await sync.runIfDue();
       expect(report.newCollections, 0);
-      expect(store.sources, isEmpty);
+      expect(store.sources, hasLength(1), reason: '只有种子源，不该导入新的');
     });
 
     test('自填源仓库地址：单个书源页也能同步', () async {
@@ -393,6 +399,35 @@ void main() {
       prefs.setSourceSyncDay('');
       final again = await sync.runIfDue(force: true, healthCheck: false);
       expect(again.newCollections, 0, reason: '两个站点都已处理过，不重复下');
+    });
+
+    test('书架里一个源都没有：放宽到 2 天补基础源（36 小时前也收）', () async {
+      final sync = DailySourceSync(
+        store: store,
+        prefs: prefs,
+        client: clientFor(time: '36小时前', sources: _twoSources()),
+        checker: (s, k) async => const SourceCheckOutcome(ok: true),
+      );
+      final r = await sync.runIfDue();
+      expect(r.newCollections, 1, reason: '新机引导窗口是 2 天');
+      expect(store.sources, hasLength(2));
+    });
+
+    test('已有书源后回归 24 小时：36 小时前的不再收', () async {
+      store.addAll([
+        BookSource(
+          bookSourceUrl: 'https://old.example.com',
+          bookSourceName: '老源',
+        ),
+      ]);
+      final sync = DailySourceSync(
+        store: store,
+        prefs: prefs,
+        client: clientFor(time: '36小时前', sources: _twoSources()),
+        checker: (s, k) async => const SourceCheckOutcome(ok: true),
+      );
+      final r = await sync.runIfDue();
+      expect(r.newCollections, 0);
     });
 
     test('关掉开关后 isDue 为 false', () {

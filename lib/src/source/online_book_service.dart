@@ -11,6 +11,7 @@
 // 本文件不依赖 UI；WebView 引擎仅在「取正文」时被调用。
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:html/parser.dart' as html_parser;
 
 import '../data/models.dart';
@@ -480,7 +481,16 @@ class OnlineBookService {
     BookSource source,
     String chapterUrl,
   ) async {
+    debugPrint('[comic] chapter=$chapterUrl');
+    debugPrint(
+      '[comic] rule="${source.contentRule?.content ?? ''}" '
+      'header=${source.header ?? ''}',
+    );
     final html = await _getHtml(source, chapterUrl);
+    debugPrint(
+      '[comic] html=${html.length} img=${RegExp(r'<img', caseSensitive: false).allMatches(html).length} '
+      'scomic=${html.contains('scomic')}',
+    );
     final out = <String>[];
     final rule = source.contentRule?.content ?? '';
     if (rule.trim().isNotEmpty) {
@@ -489,31 +499,96 @@ class OnlineBookService {
         for (final part in engine.getStrings(rule)) {
           out.addAll(extractImageUrls(part, baseUrl: chapterUrl));
         }
-      } catch (_) {
-        // 规则跑不动就交给兜底
+        debugPrint('[comic] byRule=${out.length}');
+      } catch (e) {
+        debugPrint('[comic] ruleError=$e');
       }
     }
     if (out.isEmpty) {
       out.addAll(extractImageUrls(html, baseUrl: chapterUrl));
+      debugPrint('[comic] byFallback=${out.length}');
     }
     // 去重但保留顺序（分页站点会有重复图）
     final seen = <String>{};
-    return [
+    final urls = [
       for (final url in out)
         if (seen.add(url)) url,
     ];
+    debugPrint(
+      '[comic] static=${urls.length} first=${urls.take(3).join(' | ')}',
+    );
+
+    // 有的章节站点只给一页「广告 / 推荐」图（真图要 App 或会员才给）。
+    // 章节地址里的 comic_id 一般也出现在图片路径里，能对上就只留对得上的，
+    // 免得把别的漫画的推广图当成本话正文。
+    _keepOnlyThisComic(urls, chapterUrl);
+
+    // 图片站常见：正文规则是 `@js:`（要执行脚本）或图片由 JS 插进 DOM，
+    // 静态 HTML 里只有占位符。这时让真浏览器跑一遍，从 DOM 里取大图。
+    //
+    // 注意：不能因为「规则是 @js」就无条件跑 WebView —— 包子漫画这种源
+    // 静态 HTML 里就有整话的 <amp-img>，再跑一遍 WebView 只是白等 30 秒。
+    if (urls.length < 3) {
+      try {
+        final rendered = await WebViewEngine.instance.fetchRenderedImages(
+          url: chapterUrl,
+          // 静态解析已经尽量拿到整话了，这里的定位是「补漏」，别让读者干等
+          totalWait: const Duration(seconds: 12),
+        );
+        debugPrint('[comic] webview=${rendered.length}');
+        for (final u in rendered) {
+          // WebView 从 DOM 里拿的图不经过 extractImageUrls 的过滤，
+          // 导流图 / 封面 / 二维码这些得在这里挡掉
+          if (_isJunkImage(u)) continue;
+          if (seen.add(u)) urls.add(u);
+        }
+        _keepOnlyThisComic(urls, chapterUrl);
+      } catch (e) {
+        debugPrint('[comic] webviewError=$e');
+      }
+    }
+    debugPrint('[comic] total=${urls.length}');
+    return filterChapterImages(urls, chapterUrl);
+  }
+
+  /// 收尾过滤：广告 / 封面墙 / 别的漫画的推广图都不算这一话的正文。
+  ///
+  /// 暴露出来是为了能离线测试（真实站点的新话就是这样：网页版只给
+  /// 1 张别人的漫画 + 6 张「猜你喜欢」封面）。
+  @visibleForTesting
+  static List<String> filterChapterImages(
+    List<String> urls,
+    String chapterUrl,
+  ) {
+    final kept = [
+      for (final u in urls)
+        if (!_isJunkImage(u)) u,
+    ];
+    _keepOnlyThisComic(kept, chapterUrl);
+    return kept;
   }
 
   /// 从 HTML 或「一行一个地址」的文本里提取图片 URL（相对地址按 [baseUrl] 补全）。
   ///
   /// 过滤掉站点图标 / 占位图 / 追踪像素这些明显不是漫画的图。
-  static List<String> extractImageUrls(String source, {required String baseUrl}) {
+  static List<String> extractImageUrls(
+    String source, {
+    required String baseUrl,
+  }) {
     final urls = <String>[];
-    final imgTag = RegExp(r'<img\b[^>]*>', caseSensitive: false);
+    // 包子漫画这类 AMP 站点用的是 `<amp-img src="…" data-src="…">`，
+    // 不是 `<img>`；只认 <img> 会把整话的图全漏掉。
+    final imgTag = RegExp(
+      r'<(?:img|amp-img|image|source)\b[^>]*>',
+      caseSensitive: false,
+    );
     if (imgTag.hasMatch(source)) {
       // 懒加载站点常把真地址放 data-src，src 里是占位图 → 按优先级取
       for (final m in imgTag.allMatches(source)) {
         final tag = m.group(0)!;
+        // 标签上声明的尺寸很小（1×1、16×16 这类）就是占位/广告图，
+        // 包子漫画新话网页版给的那张「别人的漫画」推广图就是 width=1 height=1
+        if (_declaredTiny(tag)) continue;
         for (final key in const [
           'data-src',
           'data-original',
@@ -549,12 +624,74 @@ class OnlineBookService {
     return out;
   }
 
+  /// 标签上声明的 width/height 很小 → 占位图 / 广告图，不是漫画正文。
+  static bool _declaredTiny(String tag) {
+    int? attr(String name) {
+      final m = RegExp(
+        '\\s$name\\s*=\\s*["\']?(\\d+)',
+        caseSensitive: false,
+      ).firstMatch(tag);
+      return m == null ? null : int.tryParse(m.group(1)!);
+    }
+
+    final w = attr('width');
+    final h = attr('height');
+    if (w == null && h == null) return false;
+    if (w != null && w > 0 && w < 50) return true;
+    if (h != null && h > 0 && h < 50) return true;
+    return false;
+  }
+
+  /// 章节地址里的「这本书」标识（`comic_id=xxx` / 路径最后一段）。
+  static String? comicSlug(String chapterUrl) {
+    final uri = Uri.tryParse(resolveUrl(chapterUrl, ''));
+    if (uri == null) return null;
+    var raw = uri.queryParameters['comic_id'] ?? uri.queryParameters['comicId'];
+    raw ??= uri.pathSegments.where((s) => s.isNotEmpty).lastOrNull;
+    if (raw == null || raw.isEmpty) return null;
+    // 站点给变体加的后缀：`hanghaiwang-weitianrongyilang_i6wg8y` → 去掉
+    final base = raw.split('_').first.toLowerCase().trim();
+    if (base.length < 6) return null;
+    if (base == 'comic' || base == 'chapter' || base == 'index') return null;
+    return base;
+  }
+
+  /// 只留「和这一话同一本漫画」的图。
+  ///
+  /// 有的站点（包子漫画的新话）网页版只给一张别的漫画的推广图，真图要 App/会员。
+  /// 章节地址里的 comic_id 一般也出现在真图的路径里，能对上就据此过滤；
+  /// 一张都对不上且本来就只有一两张 → 当没取到，别把别人的漫画当正文显示。
+  static void _keepOnlyThisComic(List<String> urls, String chapterUrl) {
+    final slug = comicSlug(chapterUrl);
+    if (slug == null || urls.isEmpty) return;
+    final matched = urls.where((u) => u.toLowerCase().contains(slug)).toList();
+    if (matched.isEmpty) {
+      // 一张都对不上：章节标识很长且带连字符时（`hanghaiwang-weitianrongyilang`
+      // 这种）基本可以断定是别的漫画的推广图 → 全丢，让上层提示「这话没图」。
+      final strong = slug.length >= 10 && slug.contains('-');
+      if (strong || urls.length <= 2) {
+        debugPrint('[comic] dropForeign=${urls.length} slug=$slug');
+        urls.clear();
+      }
+      return;
+    }
+    if (matched.length != urls.length) {
+      debugPrint('[comic] foreign=${urls.length - matched.length} slug=$slug');
+      urls
+        ..clear()
+        ..addAll(matched);
+    }
+  }
+
   static bool _looksLikeImage(String s) {
     if (s.isEmpty) return false;
     final lower = s.toLowerCase();
     if (lower.startsWith('data:')) return false;
     if (lower.startsWith('javascript:')) return false;
-    if (RegExp(r'\.(jpe?g|png|webp|bmp|avif)(\?|$)').hasMatch(lower)) return true;
+    // 书源模板没渲染出来的占位（`{{value.url}}`）不是真地址
+    if (s.contains('{{') || s.contains('}}')) return false;
+    if (RegExp(r'\.(jpe?g|png|webp|bmp|avif)(\?|$)').hasMatch(lower))
+      return true;
     // CDN 上不带扩展名的也不少；只要像图片路径就放行
     return lower.contains('/comic/') ||
         lower.contains('/scomic/') ||
@@ -579,6 +716,13 @@ class OnlineBookService {
       '/static/',
       '/ad/',
       'stat.',
+      'guiding', // 腾讯动漫的「App 导流」图
+      'app-',
+      'default_cover',
+      'cover-default',
+      '/cover/', // 站点底部的「猜你喜欢」封面墙
+      'qrcode',
+      'banner',
     ];
     if (lower.endsWith('.svg') || lower.endsWith('.gif')) return true;
     return junk.any(lower.contains);

@@ -86,8 +86,10 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
         _images = urls;
         _loading = false;
         if (urls.isEmpty) {
-          _error = '这一话没取到图片（章节地址：$href）\n'
-              '可能是书源正文规则只适用文字章节，或者站点需要特殊请求头';
+          _error =
+              '这一话没取到图片：站点网页版可能只给 App/会员看（包子漫画的'
+              '「最新一话」就是这样）。\n试试上一话 / 下一话，或者换个漫画源。\n'
+              '（章节地址：$href）';
         }
       });
       if (urls.isNotEmpty) {
@@ -246,9 +248,7 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
               aspectRatio: 3 / 4,
               child: Center(
                 child: CircularProgressIndicator(
-                  value: p == null
-                      ? null
-                      : progress.cumulativeBytesLoaded / p,
+                  value: p == null ? null : progress.cumulativeBytesLoaded / p,
                   strokeWidth: 2,
                 ),
               ),
