@@ -130,7 +130,8 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = '加载失败：$e';
+        // ComicUnavailable 自带给读者看的解释，别再加一层「加载失败」
+        _error = e is ComicUnavailable ? '$e' : '加载失败：$e';
       });
     }
   }

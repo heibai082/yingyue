@@ -482,6 +482,24 @@ class OnlineBookService {
     BookSource source,
     String chapterUrl,
   ) async {
+    var last = (urls: const <String>[], why: '这一话没取到图片');
+    // 站点偶尔（限流 / 边缘节点抖动）会给一页「没有正文图」的空壳，隔一秒重试一次
+    for (var attempt = 0; attempt < 2; attempt++) {
+      last = await _comicOnce(source, chapterUrl);
+      if (last.urls.isNotEmpty) return last.urls;
+      if (attempt == 0) {
+        debugPrint('[comic] empty, retry once');
+        await Future<void>.delayed(const Duration(milliseconds: 1200));
+      }
+    }
+    throw ComicUnavailable(last.why);
+  }
+
+  /// 取一次章节图；取不到时把「为什么」也带出来，方便在手机上直接看懂。
+  Future<({List<String> urls, String why})> _comicOnce(
+    BookSource source,
+    String chapterUrl,
+  ) async {
     debugPrint('[comic] chapter=$chapterUrl');
     debugPrint(
       '[comic] rule="${source.contentRule?.content ?? ''}" '
@@ -529,7 +547,10 @@ class OnlineBookService {
     //
     // 注意：不能因为「规则是 @js」就无条件跑 WebView —— 包子漫画这种源
     // 静态 HTML 里就有整话的 <amp-img>，再跑一遍 WebView 只是白等 30 秒。
-    if (urls.length < 3) {
+    // 页面本身就在喊「打开 App / 解锁」、而且一张正文图都没有：浏览器里也不会突然有，
+    // 再跑 12 秒 WebView 只是让读者多等，直接跳过。
+    final gated = urls.isEmpty && _looksGated(html);
+    if (urls.length < 3 && !gated) {
       try {
         final rendered = await WebViewEngine.instance.fetchRenderedImages(
           url: chapterUrl,
@@ -549,7 +570,29 @@ class OnlineBookService {
       }
     }
     debugPrint('[comic] total=${urls.length}');
-    return filterChapterImages(urls, chapterUrl);
+    final kept = filterChapterImages(urls, chapterUrl);
+    if (kept.isEmpty) {
+      return (urls: const <String>[], why: _whyNoImages(html, chapterUrl));
+    }
+    return (urls: kept, why: '');
+  }
+
+  /// 页面是不是「只有 App / 会员能看」的空壳页。
+  static bool _looksGated(String html) =>
+      html.contains('打开APP') ||
+      html.contains('安装包子漫画') ||
+      html.contains('解锁最新') ||
+      html.contains('APP解锁');
+
+  /// 取不到图时给读者的解释（带上页面大小，远程排查时能看出是空壳页还是解析失败）。
+  static String _whyNoImages(String html, String chapterUrl) {
+    final kb = html.length ~/ 1024;
+    final reason = _looksGated(html)
+        ? '页面里只有「打开 App / 解锁」的推广，站点没给网页版正文图'
+        : '页面 ${kb}KB，但一张正文图都没识别到（站点可能临时限流，或这一话还没放出）';
+    return '这一话取不到图：$reason。\n'
+        '先点「重试」；还不行就翻上一话/下一话，或者换个漫画源。\n'
+        '章节地址：$chapterUrl';
   }
 
   /// 广告页过滤要逐张探测尺寸（18 张图大约 4~6 秒），所以**不要**卡在打开章节的路上：
@@ -751,4 +794,14 @@ class OnlineBookService {
     if (lower.endsWith('.svg') || lower.endsWith('.gif')) return true;
     return junk.any(lower.contains);
   }
+}
+
+/// 这一话取不到图时抛出，携带给读者看的原因。
+class ComicUnavailable implements Exception {
+  ComicUnavailable(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }
