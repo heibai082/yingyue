@@ -1140,6 +1140,17 @@ class _SettingsPageState extends State<SettingsPage> {
               style: TextStyle(fontSize: 12),
             ),
           ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: widget.prefs.autoTrackCache,
+            onChanged: widget.prefs.setAutoTrackCache,
+            secondary: const Icon(Icons.auto_mode_rounded),
+            title: const Text('自动追更缓存', style: TextStyle(fontSize: 14)),
+            subtitle: const Text(
+              '打开 App 时，按每本书的缓存范围补新章（书籍详情 →「缓存」里改范围）',
+              style: TextStyle(fontSize: 12),
+            ),
+          ),
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.text_snippet_rounded),

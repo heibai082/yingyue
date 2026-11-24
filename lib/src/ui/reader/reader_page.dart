@@ -14,6 +14,8 @@ import 'package:flutter/services.dart';
 import '../../data/app_activity.dart';
 import '../../data/book_source.dart';
 import '../../data/book_store.dart';
+import '../../data/cache_plan.dart';
+import '../../data/cache_tracker.dart';
 import '../../data/models.dart';
 import '../../data/paginator.dart';
 import '../../data/offline_downloader.dart';
@@ -27,6 +29,7 @@ import '../../platform/native_bridge.dart';
 import '../../platform/tts_service.dart';
 import '../../platform/url_launcher.dart';
 import '../../source/source_store.dart';
+import '../cache_settings_sheet.dart';
 import '../source/source_switch_sheet.dart';
 import '../widgets/battery_badge.dart';
 import 'cover_turn.dart';
@@ -124,8 +127,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 本章插图目录（EPUB 有插图时非空；正文里的图片标记从这里加载）。
   String? _imageDir;
 
-  /// 离线缓存下载器（仅在线书用；一次一个任务）。
-  final OfflineDownloader _downloader = OfflineDownloader();
+  /// 离线缓存（仅在线书用；一次一个任务）——按本书的「缓存范围」下。
+  late final CacheTracker _tracker = CacheTracker(store: widget.store);
 
   /// 离线下载进度（null = 未在下载）。
   OfflineDownloadProgress? _offlineProgress;
@@ -217,6 +220,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     unawaited(NativeBridge.setVolumeKeyPaging(false));
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _content?.dispose();
+    _tracker.dispose();
     super.dispose();
   }
 
@@ -900,6 +904,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     if (!widget.prefs.autoPrefetchChapters) return;
     final book = _book;
     if (book == null) return;
+    // 这本书被设成「不自动缓存」→ 不再顺手预取（省流量，也尊重用户的选择）
+    if (book.cachePlan.isOff) return;
     for (var d = 1; d <= 2; d++) {
       final i = _chapterIndex + d;
       if (i < 0 || i >= book.chapterCount) continue;
@@ -1402,33 +1408,45 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
   }
 
-  /// 离线缓存：把整本（在线书）提前抓下来，断网也能读。
-  Future<void> _downloadWholeBook() async {
+  /// 离线缓存：按本书的「缓存范围」把缺的章提前抓下来，断网也能读。
+  ///
+  /// 0.41 起不再是「无脑整本」：范围是「从当前章到最新」就只补往后，
+  /// 是「不自动缓存」就先去设置里打开（用户反馈：缓存哪一段得自己说了算）。
+  Future<void> _downloadByPlan() async {
     final book = _book;
     if (book == null || book.format != BookFormat.online) return;
-    if (_downloader.running) {
+    if (_tracker.running) {
       // 已在下载：再点一次 = 暂停
-      _downloader.cancel();
+      _tracker.cancel();
+      return;
+    }
+    if (book.cachePlan.isOff) {
+      _toastLate('这本书关掉了自动缓存，先在「缓存设置」里打开');
+      await _openCacheSettings();
       return;
     }
     final store = widget.store;
-    final cached = await store.cachedChapterCount(book.id);
+    await store.refreshChapterCache(book.id);
     if (!mounted) return;
+    final plan = buildCachePlan(book, cached: book.chapterCache);
+    if (plan.isEmpty) {
+      _toastLate('当前范围内的章节都缓存好啦 🎀');
+      return;
+    }
     setState(() {
       _offlineProgress = OfflineDownloadProgress(
         done: 0,
-        total: book.chapterCount - cached,
+        total: plan.indices.length,
         failed: 0,
-        currentChapter: cached,
+        currentChapter: plan.indices.first,
         finished: false,
         cancelled: false,
+        cachedBefore: plan.cachedInRange,
       );
     });
 
-    final result = await _downloader.download(
-      book,
-      store,
-      from: 0,
+    final result = await _tracker.downloadByPlan(
+      book.id,
       onProgress: (p) {
         if (mounted) setState(() => _offlineProgress = p);
       },
@@ -1436,13 +1454,35 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
     if (!mounted) return;
     setState(() => _offlineProgress = null);
-    final ok = book.chapterCount - result.failed;
+    if (result == null) {
+      _toastLate('当前范围内的章节都缓存好啦');
+      return;
+    }
     _toastLate(
       result.cancelled
-          ? '已暂停缓存（已存 $ok 章，再点一次继续）'
+          ? '已暂停缓存（本次存了 ${result.done} 章，再点一次继续）'
           : result.failed == 0
-          ? '整本已缓存，断网也能读啦'
-          : '已缓存 $ok 章，${result.failed} 章失败（可重试）',
+          ? '缓存完成 ${result.done} 章，断网也能读啦'
+          : '缓存 ${result.done} 章，${result.failed} 章失败（可重试）',
+    );
+  }
+
+  /// 阅读器里的「缓存设置」：改完范围就地开下（不用回详情页）。
+  Future<void> _openCacheSettings() async {
+    final book = _book;
+    if (book == null || book.format != BookFormat.online) return;
+    await showBookCacheSettings(
+      context,
+      book: book,
+      store: widget.store,
+      onSave: (plan) async {
+        widget.store.setCachePlan(book.id, plan);
+        if (plan.isOff) {
+          _toastLate('已关掉《${book.title}》的自动缓存');
+          return;
+        }
+        unawaited(_downloadByPlan());
+      },
     );
   }
 
@@ -1596,17 +1636,20 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                         }
                       },
                     ),
-                  // 离线缓存（在线书）：把整本提前下好
+                  // 离线缓存（在线书）：按本书的缓存范围补章；长按改范围
                   if (book?.format == BookFormat.online)
-                    IconButton(
-                      onPressed: _downloadWholeBook,
-                      icon: Icon(
-                        _offlineProgress != null
-                            ? Icons.cloud_sync_rounded
-                            : Icons.cloud_download_outlined,
-                        color: dark ? Colors.white : Colors.black87,
+                    GestureDetector(
+                      onLongPress: _openCacheSettings,
+                      child: IconButton(
+                        onPressed: _downloadByPlan,
+                        icon: Icon(
+                          _offlineProgress != null
+                              ? Icons.cloud_sync_rounded
+                              : Icons.cloud_download_outlined,
+                          color: dark ? Colors.white : Colors.black87,
+                        ),
+                        tooltip: '离线缓存（长按改范围）',
                       ),
-                      tooltip: '离线缓存',
                     ),
                   // 当前章节来源：跳浏览器打开本章原始页面
                   if (_currentChapterUrl != null)

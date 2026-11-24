@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import '../platform/native_bridge.dart';
 import 'epub_parser.dart';
 import 'file_scan.dart';
+import 'cache_plan.dart';
 import 'models.dart';
 import '../source/chapter_order.dart';
 import 'stats_store.dart';
@@ -463,6 +464,102 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
       final dir = chapterCacheDir(bookId);
       if (await dir.exists()) await dir.delete(recursive: true);
     } catch (_) {}
+    byId(bookId)?.chapterCache = const {};
+    notifyListeners();
+  }
+
+  /// 扫一遍这本书的缓存目录，把「真正存了正文」的章节序号记到 [Book.chapterCache]。
+  ///
+  /// 缓存文件名见 [OnlineBookContent]：`ch_v2_0007.txt`。只认非空文件——
+  /// 空文件等于没缓存，规划任务时还得重下。
+  Future<Set<int>> refreshChapterCache(String bookId) async {
+    final set = <int>{};
+    try {
+      final dir = chapterCacheDir(bookId);
+      if (await dir.exists()) {
+        await for (final e in dir.list(followLinks: false)) {
+          if (e is! File) continue;
+          final m = _cacheFilePattern.firstMatch(e.uri.pathSegments.last);
+          if (m == null) continue;
+          final index = int.tryParse(m.group(1) ?? '');
+          if (index == null) continue;
+          try {
+            if (await e.length() > 0) set.add(index);
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    final book = byId(bookId);
+    if (book != null) book.chapterCache = set;
+    return set;
+  }
+
+  static final RegExp _cacheFilePattern = RegExp(r'^ch_v2_(\d+)\.txt$');
+
+  /// 更新一本书的缓存范围偏好（详情页「缓存设置」）。
+  void setCachePlan(String id, BookCachePlan plan) {
+    final b = byId(id);
+    if (b == null) return;
+    b.cachePlan = plan.copyWith(
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
+    );
+    // 换了范围就丢掉上一轮的追更结果，免得把旧新章混进来
+    b.discoveredChapters = const [];
+    _saveSoon();
+    notifyListeners();
+  }
+
+  /// 记下「这本书刚跟站点对过目录」（追更节流用）。
+  void markTracked(String id) {
+    final b = byId(id);
+    if (b == null) return;
+    b.lastTrackedAt = DateTime.now().millisecondsSinceEpoch;
+    _saveSoon();
+  }
+
+  /// 把追更发现的新章节并入目录。
+  ///
+  /// 阅读进度按「章节链接」找回原章节的新位置（目录方向可能变、新章可能插在
+  /// 最前面）；找不到就夹取到合法范围，绝不抛异常。
+  void applyChapterUpdates(String id) {
+    final b = byId(id);
+    if (b == null) return;
+    final added = b.discoveredChapters;
+    if (added.isEmpty) return;
+
+    final prevHref = b.chapterIndex >= 0 && b.chapterIndex < b.chapters.length
+        ? b.chapters[b.chapterIndex].href
+        : null;
+    // 目录方向以原有目录为准（新章只有一两条时判断不出方向）
+    final newestFirst = b.chapters.length >= 2
+        ? looksNewestFirst(b.chapters)
+        : looksNewestFirst(added);
+    final merged = appendNewChapters(
+      b.chapters,
+      added,
+      newestFirst: newestFirst,
+    );
+    b.chapters
+      ..clear()
+      ..addAll(merged);
+    b.discoveredChapters = const [];
+
+    // 进度：按章节链接找回去；老数据没链接就按原序号夹取
+    var index = prevHref == null || prevHref.isEmpty
+        ? -1
+        : b.chapters.indexWhere((c) => c.href == prevHref);
+    if (b.chapters.isEmpty) {
+      b.chapterIndex = 0;
+    } else {
+      b.chapterIndex = (index < 0 ? b.chapterIndex : index)
+          .clamp(0, b.chapters.length - 1)
+          .toInt();
+    }
+    b.totalChars = b.chapters.fold<int>(0, (n, c) => n + c.charCount);
+    // 目录变了 → 缓存序号的含义也变了，让上层重新扫
+    b.chapterCache = const {};
+    _saveSoon();
+    notifyListeners();
   }
 
   // ---------- 持久化 ----------

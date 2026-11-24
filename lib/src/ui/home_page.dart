@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import '../source/subscription_link.dart';
 import '../source/http_client.dart';
@@ -10,6 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../data/book_store.dart';
+import '../data/cache_tracker.dart';
+import '../data/app_activity.dart' show kReaderActive;
 import '../data/pet_guide.dart';
 import '../data/pet_store.dart';
 import '../data/prefs.dart';
@@ -57,6 +59,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// 每天首次打开的「书源同步 + 全量体检」延迟任务。
   Timer? _sourceSyncTimer;
 
+  /// 自动追更 / 补缓存（见 [_scheduleCacheTrack]）。
+  late final CacheTracker _cacheTracker = CacheTracker(store: widget.store);
+  Timer? _cacheTrackTimer;
+
   @override
   void initState() {
     super.initState();
@@ -71,6 +77,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     unawaited(_consumeLaunchFile());
     _scheduleAutoUpdateCheck();
     _scheduleDailySourceSync();
+    _scheduleCacheTrack();
     _check();
   }
 
@@ -112,6 +119,47 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   // ==================== 每天首次：书源同步 + 体检 ====================
+
+  // ==================== 自动追更 / 补缓存 ====================
+
+  /// 启动后（以及每次回到前台）给「开了自动追更」的书补新章。
+  ///
+  /// 用户反馈：「从当前章节缓存到最新（并且开启自动追剧模式缓存）」——
+  /// 手机上没法常驻后台，所以把「追更」放在每次打开 App 的头几分钟里做：
+  ///   - 延迟 15 秒：避开开屏、更新检查、书源同步那几波请求；
+  ///   - 同一本书 30 分钟内不重复抓目录（[CacheTracker.trackInterval]）；
+  ///   - 用户一进阅读页 [kReaderActive] 就整轮让路（不抢带宽、不掉帧）；
+  ///   - 设置里可以整个关掉（[AppPrefs.autoTrackCache]）。
+  void _scheduleCacheTrack() {
+    if (Platform.environment['FLUTTER_TEST'] == 'true') return;
+    _cacheTrackTimer?.cancel();
+    _cacheTrackTimer = Timer(const Duration(seconds: 15), () {
+      unawaited(_runCacheTrack());
+    });
+  }
+
+  Future<void> _runCacheTrack() async {
+    if (!mounted) return;
+    if (!widget.prefs.agreementAccepted) return;
+    if (!widget.prefs.autoTrackCache) return;
+    if (kPetGuideActive.value || kPetEggActive.value) return;
+    try {
+      final results = await _cacheTracker.trackAll();
+      if (!mounted) return;
+      final changed = results.where((r) => r.changed).toList();
+      if (changed.isEmpty) return;
+      final added = changed.fold<int>(0, (n, r) => n + r.added);
+      final downloaded = changed.fold<int>(0, (n, r) => n + r.downloaded);
+      final text = added > 0
+          ? '追更：新 $added 章，下好 $downloaded 章（${changed.length} 本书）'
+          : '补缓存完成：下好 $downloaded 章';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(text), duration: const Duration(seconds: 5)),
+      );
+    } catch (e) {
+      debugPrint('[cache_track] 自动追更失败：$e');
+    }
+  }
 
   /// 每天第一次打开 App：拉源仓库 24 小时内的新合集 → 并入 → 全量体检
   /// （同一个源连续失败 2 次会被自动删除）。
@@ -270,7 +318,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _check();
+    if (state == AppLifecycleState.resumed) {
+      _check();
+      // 从后台回来也补一轮（手机上「每天第一次打开」往往就是切回前台）
+      _scheduleCacheTrack();
+    }
   }
 
   @override
@@ -279,6 +331,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     kPetGuideStepId.removeListener(_onGuideStepChanged);
     _updateCheckTimer?.cancel();
     _sourceSyncTimer?.cancel();
+    _cacheTrackTimer?.cancel();
+    _cacheTracker.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../data/book_store.dart';
+import '../data/cache_plan.dart';
+import '../data/cache_tracker.dart';
 import '../data/models.dart';
 import '../data/offline_downloader.dart';
 import '../data/prefs.dart';
@@ -14,6 +16,7 @@ import '../source/source_store.dart';
 import '../theme/app_theme.dart';
 import '../util/book_share.dart';
 import 'reader/reader_page.dart';
+import 'cache_settings_sheet.dart';
 import 'folder_picker_page.dart';
 import 'source/source_switch_sheet.dart';
 import 'widgets/book_cover.dart';
@@ -40,8 +43,14 @@ class _BookDetailPageState extends State<BookDetailPage> {
   /// 离线下载器（一次一个任务）。
   final OfflineDownloader _downloader = OfflineDownloader();
 
+  /// 追更 / 检查新章（同一时刻只跑一轮）。
+  late final CacheTracker _tracker = CacheTracker(store: widget.store);
+
   /// 当前下载进度（null = 没在下载）。
   OfflineDownloadProgress? _progress;
+
+  /// 正在追更检查（抓目录那几秒）。
+  bool _checking = false;
 
   /// 已缓存章节数（进度展示用）。
   int? _cachedCount;
@@ -56,36 +65,53 @@ class _BookDetailPageState extends State<BookDetailPage> {
     _refreshCachedCount();
   }
 
-  Future<void> _refreshCachedCount() async {
-    final n = await store.cachedChapterCount(widget.bookId);
-    if (mounted) setState(() => _cachedCount = n);
+  @override
+  void dispose() {
+    _tracker.dispose();
+    super.dispose();
   }
 
-  /// 缓存整本（在线书）：逐章抓取并落盘，可随时取消。
-  Future<void> _downloadAll() async {
+  /// 扫一遍缓存目录 + 刷新展示数字。
+  ///
+  /// 以前只统计「有几个文件」，没法回答「缓存的是哪几章」。现在把序号也记到
+  /// Book 上，按范围算计划时就能跳过已缓存的章节。
+  Future<void> _refreshCachedCount() async {
+    final set = await store.refreshChapterCache(widget.bookId);
+    if (mounted) setState(() => _cachedCount = set.length);
+  }
+
+  /// 按本书的「缓存范围」下载（详情页的「缓存」入口）。
+  Future<void> _downloadByPlan() async {
     final book = _book;
     if (book == null) return;
     if (_downloader.running) return;
     final messenger = ScaffoldMessenger.of(context);
 
-    // 从「已缓存的下一章」开始，避免重复抓（重跑只补缺的）
-    final cached = await store.cachedChapterCount(book.id);
+    await _refreshCachedCount();
     if (!mounted) return;
+    final plan = buildCachePlan(book, cached: book.chapterCache);
+    if (plan.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('当前范围内的章节都缓存好啦 🎀')));
+      return;
+    }
+
     setState(() {
       _progress = OfflineDownloadProgress(
         done: 0,
-        total: book.chapterCount - cached,
+        total: plan.indices.length,
         failed: 0,
-        currentChapter: cached,
+        currentChapter: plan.indices.first,
         finished: false,
         cancelled: false,
+        cachedBefore: plan.cachedInRange,
       );
     });
 
-    final result = await _downloader.download(
+    final result = await _downloader.downloadChapters(
       book,
       store,
-      from: 0,
+      indices: plan.indices,
+      cachedBefore: plan.cachedInRange,
       onProgress: (p) {
         if (mounted) setState(() => _progress = p);
       },
@@ -95,19 +121,65 @@ class _BookDetailPageState extends State<BookDetailPage> {
     setState(() => _progress = null);
     await _refreshCachedCount();
     if (!mounted) return;
-
-    final ok = book.chapterCount - result.failed;
     messenger.showSnackBar(
       SnackBar(
         content: Text(
           result.cancelled
-              ? '已暂停（已缓存 $ok 章，下次可继续）'
+              ? '已暂停（本次存了 ${result.done} 章，再点一次继续）'
               : result.failed == 0
-              ? '整本已缓存，断网也能读啦 🎀'
-              : '已缓存 $ok 章，${result.failed} 章失败（可重试）',
+              ? '缓存完成 ${result.done} 章，断网也能读啦 🎀'
+              : '缓存 ${result.done} 章，${result.failed} 章失败（可重试）',
         ),
         duration: const Duration(seconds: 3),
       ),
+    );
+  }
+
+  /// 「检查更新」：抓站点目录看有没有新章，有就按范围补下来。
+  Future<void> _checkUpdates() async {
+    final book = _book;
+    if (book == null || _checking || _downloader.running) return;
+    if (book.cachePlan.isOff) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('这本书关掉了自动缓存，先在「缓存设置」里打开')));
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _checking = true);
+    try {
+      final r = await _tracker.trackOne(book.id, force: true);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            r.skipped
+                ? '${r.name}：${r.reason ?? '没有新章节'}'
+                : '《${r.name}》${r.summary}',
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _checking = false);
+      await _refreshCachedCount();
+    }
+  }
+
+  /// 缓存范围设置面板（全部 / 从当前章到最新 + 追更 / 一段区间 / 不缓存）。
+  Future<void> _showCacheSettings() async {
+    final book = _book;
+    if (book == null) return;
+    await showBookCacheSettings(
+      context,
+      book: book,
+      store: store,
+      onSave: (plan) async {
+        store.setCachePlan(book.id, plan);
+        if (plan.isOff) return;
+        // 选完立即按新范围开下（用户反馈：点完就该动起来）
+        unawaited(_downloadByPlan());
+      },
     );
   }
 
@@ -202,7 +274,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
                         ? () => _switchSource(context, book)
                         : null,
                     onDownload: isOnline && !_downloader.running
-                        ? _downloadAll
+                        ? _showCacheSettings
                         : null,
                   ),
                 ),
@@ -216,8 +288,14 @@ class _BookDetailPageState extends State<BookDetailPage> {
                       book: book,
                       cachedCount: _cachedCount,
                       progress: _progress,
-                      onDownload: _downloadAll,
-                      onCancel: _downloader.cancel,
+                      checking: _checking,
+                      onDownload: _downloadByPlan,
+                      onSettings: _showCacheSettings,
+                      onCheck: _checkUpdates,
+                      onCancel: () {
+                        _tracker.cancel();
+                        _downloader.cancel();
+                      },
                       onClear: _clearCache,
                     ),
                   ),
@@ -594,16 +672,21 @@ class _Actions extends StatelessWidget {
   }
 }
 
-/// 离线缓存卡片（仅在线书）：显示已缓存章节 / 下载进度 / 操作按钮。
+/// 离线缓存卡片（仅在线书）：缓存范围 / 进度 / 操作按钮。
 ///
 /// 用户反馈「不支持离线缓存」：这里让用户能把整本提前下好，
 /// 之后地铁 / 飞机上断网也能接着读。
+///
+/// 0.41 起多了「范围」：全部 / 从当前章到最新（追更）/ 一段区间 / 不缓存。
 class _OfflineCard extends StatelessWidget {
   const _OfflineCard({
     required this.book,
     required this.cachedCount,
     required this.progress,
+    required this.checking,
     required this.onDownload,
+    required this.onSettings,
+    required this.onCheck,
     required this.onCancel,
     required this.onClear,
   });
@@ -616,7 +699,12 @@ class _OfflineCard extends StatelessWidget {
   /// 下载进度（null = 空闲）。
   final OfflineDownloadProgress? progress;
 
+  /// 正在抓目录检查新章（还没开始下）。
+  final bool checking;
+
   final VoidCallback onDownload;
+  final VoidCallback onSettings;
+  final VoidCallback onCheck;
   final VoidCallback onCancel;
   final VoidCallback onClear;
 
@@ -627,6 +715,37 @@ class _OfflineCard extends StatelessWidget {
     final cached = cachedCount ?? 0;
     final p = progress;
     final downloading = p != null;
+    final plan = book.cachePlan;
+    final off = plan.isOff;
+
+    // 文案：先回答「缓存哪一段」，再回答「存了多少」
+    final String hint;
+    if (cached >= total && total > 0) {
+      hint = '整本已缓存，断网也能读啦～';
+    } else if (off) {
+      hint = '这本书不自动缓存（阅读时也不再预取）';
+    } else if (plan.mode == CacheMode.from) {
+      final n = ((plan.start ?? book.safeChapterIndex) + 1).clamp(
+        1,
+        total <= 0 ? 1 : total,
+      );
+      hint = '从第 $n 章缓存到最新，新章自动补';
+    } else if (plan.mode == CacheMode.range) {
+      hint = '只缓存 ${plan.describe(total)}';
+    } else {
+      hint = '提前缓存整本，没网时也能接着看';
+    }
+
+    final String primaryLabel;
+    if (downloading) {
+      primaryLabel = '暂停';
+    } else if (off) {
+      primaryLabel = '打开缓存';
+    } else if (cached > 0 && cached < total) {
+      primaryLabel = '继续缓存';
+    } else {
+      primaryLabel = '开始缓存';
+    }
 
     return SoftCard(
       radius: 18,
@@ -652,6 +771,38 @@ class _OfflineCard extends StatelessWidget {
                 style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
               ),
             ],
+          ),
+          const SizedBox(height: 4),
+          // 范围：一行小字 + 「改」，比再塞一排按钮省地方
+          InkWell(
+            onTap: downloading ? null : onSettings,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Icon(
+                    off ? Icons.notifications_off_outlined : Icons.tune_rounded,
+                    size: 13,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      '范围：${plan.describe(total)}',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '修改',
+                    style: TextStyle(fontSize: 12, color: scheme.primary),
+                  ),
+                ],
+              ),
+            ),
           ),
           const SizedBox(height: 6),
           if (downloading) ...[
@@ -684,27 +835,42 @@ class _OfflineCard extends StatelessWidget {
             ),
           ] else ...[
             Text(
-              cached >= total && total > 0
-                  ? '整本已缓存，断网也能读啦～'
-                  : '提前缓存整本，没网时也能接着看',
+              checking ? '正在检查有没有新章节…' : hint,
               style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 6),
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 OutlinedButton.icon(
-                  onPressed: onDownload,
+                  onPressed: checking ? null : onDownload,
                   style: OutlinedButton.styleFrom(
                     visualDensity: VisualDensity.compact,
                   ),
                   icon: const Icon(Icons.download_rounded, size: 17),
                   label: Text(
-                    cached > 0 && cached < total ? '继续缓存' : '缓存整本',
+                    primaryLabel,
                     style: const TextStyle(fontSize: 12.5),
                   ),
                 ),
-                if (cached > 0) ...[
-                  const SizedBox(width: 8),
+                if (!off)
+                  TextButton.icon(
+                    onPressed: checking ? null : onCheck,
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    icon: checking
+                        ? const SizedBox(
+                            width: 13,
+                            height: 13,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.refresh_rounded, size: 17),
+                    label: const Text('检查更新', style: TextStyle(fontSize: 12.5)),
+                  ),
+                if (cached > 0)
                   TextButton.icon(
                     onPressed: onClear,
                     style: TextButton.styleFrom(
@@ -713,7 +879,6 @@ class _OfflineCard extends StatelessWidget {
                     icon: const Icon(Icons.delete_outline_rounded, size: 17),
                     label: const Text('清除缓存', style: TextStyle(fontSize: 12.5)),
                   ),
-                ],
               ],
             ),
           ],

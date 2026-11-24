@@ -98,6 +98,13 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   /// 读一章自动往后缓存两章（漫画预取图片列表，小说直接缓存正文）。
   bool autoPrefetchChapters = true;
 
+  /// 启动 / 回到前台时，给「开了自动追更」的书补新章并缓存（默认开启）。
+  ///
+  /// 用户反馈：「从当前章节缓存到最新（并且开启自动追剧模式缓存）」——
+  /// 范围选好了还得有人盯着站点更新，这个开关就是那个「盯着」的口子。
+  /// 关掉后只能手动点「立即检查更新」。
+  bool autoTrackCache = true;
+
   /// 正文区距屏幕顶部的留白（上边距）。
   ///
   /// 用户反馈：希望能自己定「正文离顶部多远」（原先是写死的 30）。
@@ -392,7 +399,8 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           ttsVoiceSid = (data['ttsVoiceSid'] as num?)?.toInt() ?? 0;
           ttsRolePlay = data['ttsRolePlay'] as bool? ?? false;
           frostedGlass = data['frostedGlass'] as bool? ?? false;
-    autoPrefetchChapters = data['autoPrefetchChapters'] as bool? ?? true;
+          autoPrefetchChapters = data['autoPrefetchChapters'] as bool? ?? true;
+          autoTrackCache = data['autoTrackCache'] as bool? ?? true;
           webdavUrl = data['webdavUrl'] as String? ?? '';
           webdavUser = data['webdavUser'] as String? ?? '';
           webdavPass = data['webdavPass'] as String? ?? '';
@@ -590,6 +598,13 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   void setAutoPrefetchChapters(bool v) {
     if (autoPrefetchChapters == v) return;
     autoPrefetchChapters = v;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setAutoTrackCache(bool v) {
+    if (autoTrackCache == v) return;
+    autoTrackCache = v;
     _saveSoon();
     notifyListeners();
   }
@@ -1008,7 +1023,8 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
         'ttsVoiceSid': ttsVoiceSid,
         'ttsRolePlay': ttsRolePlay,
         'frostedGlass': frostedGlass,
-    'autoPrefetchChapters': autoPrefetchChapters,
+        'autoPrefetchChapters': autoPrefetchChapters,
+        'autoTrackCache': autoTrackCache,
         'webdavUrl': webdavUrl,
         'webdavUser': webdavUser,
         'webdavDir': webdavDir,

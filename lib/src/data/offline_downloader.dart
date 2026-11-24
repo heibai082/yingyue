@@ -3,6 +3,9 @@
 // 用户反馈：「不支持离线缓存」——原先只有「读到哪缓存到哪」（翻页时顺手
 // 存一章），没法提前把书下好，地铁 / 飞机上就断粮。这里提供批量预下载。
 //
+// 0.41 起支持「按计划下」：下哪些章、什么顺序由 cache_plan.dart 决定
+// （全部 / 从当前章到最新 / 一段区间），这里只负责按序抓取 + 落盘 + 报进度。
+//
 // 设计要点：
 //   - 并发受控（默认 4）：书源站点对并发敏感，太多会被限流 / 封；
 //   - 逐章落盘（复用 OnlineBookContent 的缓存文件名），**随时中断不白干**；
@@ -23,6 +26,9 @@ class OfflineDownloadProgress {
     required this.currentChapter,
     required this.finished,
     required this.cancelled,
+    this.cachedBefore = 0,
+    this.newChapters = 0,
+    this.failureReasons = const {},
   });
 
   /// 已完成（含跳过 + 成功）。
@@ -42,6 +48,15 @@ class OfflineDownloadProgress {
 
   /// 是否被用户取消。
   final bool cancelled;
+
+  /// 本次计划范围内「开跑前就已经缓存好」的章数（进度文案用）。
+  final int cachedBefore;
+
+  /// 本次追更新追加的章节数（0 = 只是补缓存，没有新章）。
+  final int newChapters;
+
+  /// 失败原因 → 章数（给用户看「为什么缺」）。
+  final Map<String, int> failureReasons;
 
   double get fraction => total <= 0
       ? (finished ? 1 : 0)
@@ -96,59 +111,99 @@ class OfflineDownloader {
     final total = book.chapters.length;
     final start = from.clamp(0, total);
     final end = total == 0 ? -1 : (to ?? total - 1).clamp(-1, total - 1);
-    final count = end < start ? 0 : end - start + 1;
+    final indices = end < start
+        ? const <int>[]
+        : [for (var i = start; i <= end; i++) i];
+    return downloadChapters(
+      book,
+      store,
+      indices: indices,
+      onProgress: onProgress,
+    );
+  }
 
+  /// 按计划下载（0.41）：只抓 [indices] 里的章节，顺序就是优先级。
+  ///
+  /// 与 [download] 的区别：章节不必连续，也不用按序号顺序下——「从当前章到
+  /// 最新」要先给用户看到新章，所以计划里新章排前面。
+  Future<OfflineDownloadProgress> downloadChapters(
+    Book book,
+    BookStore store, {
+    required List<int> indices,
+    int cachedBefore = 0,
+    int newChapters = 0,
+    void Function(OfflineDownloadProgress)? onProgress,
+  }) async {
+    if (_running) {
+      throw StateError('已有下载任务在进行');
+    }
     _running = true;
     _cancelled = false;
 
     var done = 0;
     var failed = 0;
-    var current = start;
-
-    BookContent? content;
+    var current = indices.isEmpty ? 0 : indices.first;
+    final reasons = <String, int>{};
+    final total = indices.length;
     var finished = false;
 
     OfflineDownloadProgress snapshot() => OfflineDownloadProgress(
       done: done,
-      total: count,
+      total: total,
       failed: failed,
       currentChapter: current,
       finished: finished,
       cancelled: _cancelled,
+      cachedBefore: cachedBefore,
+      newChapters: newChapters,
+      failureReasons: Map.unmodifiable(reasons),
     );
 
     void report() => onProgress?.call(snapshot());
+    void fail(String reason) {
+      failed++;
+      reasons[reason] = (reasons[reason] ?? 0) + 1;
+    }
 
+    BookContent? content;
     try {
       report();
-      if (count > 0 && !_cancelled) {
+      if (total > 0 && !_cancelled) {
         content = _contentFactory(book, store);
       }
-      // 简单的工作池：固定 concurrency 个 worker 抢同一个队列。
-      // 使用游标，避免 removeAt(0) 每章搬移剩余队列造成 O(n²) 开销。
-      var next = start;
+      // 工作池：固定 concurrency 个 worker 按顺序抢 [indices] 里的下一章。
+      // 用游标而不是 removeAt(0)，避免每章搬移剩余队列造成 O(n²)。
+      var next = 0;
       Future<void> worker() async {
         while (true) {
           if (_cancelled) return;
-          if (next > end) return;
-          final index = next++;
+          if (next >= indices.length) return;
+          final index = indices[next++];
           current = index;
           try {
             final text = await content!.chapterText(index);
             if (text.trim().isEmpty) {
-              failed++;
+              // 空正文 = 没真的存下来，按失败算（否则「断网能读」是假的）
+              fail('正文为空');
             } else {
               done++;
             }
-          } catch (_) {
-            failed++;
+          } on ComicChapterException catch (e) {
+            // 漫画章节：正文抽不出来是正常的，图片清单已经落地（翻页直接出图）
+            if (e.images.isEmpty) {
+              fail('这一话没取到图片');
+            } else {
+              done++;
+            }
+          } catch (e) {
+            fail(_shortReason(e));
           }
           report();
         }
       }
 
       final workers = <Future<void>>[
-        for (var i = 0; i < concurrency && i < count; i++) worker(),
+        for (var i = 0; i < concurrency && i < total; i++) worker(),
       ];
       await Future.wait(workers);
     } finally {
@@ -163,5 +218,16 @@ class OfflineDownloader {
     final result = snapshot();
     onProgress?.call(result);
     return result;
+  }
+
+  /// 把异常压成一句能显示在进度条下面的话（同一类失败会被合并计数）。
+  static String _shortReason(Object e) {
+    final s = e.toString();
+    if (s.contains('书源缺失')) return '书源缺失';
+    if (s.contains('缺少链接')) return '章节缺链接';
+    if (s.contains('拦截') || s.contains('改版')) return '站点拦截';
+    if (s.contains('Timeout') || s.contains('超时')) return '超时';
+    if (s.contains('Socket') || s.contains('网络')) return '网络错误';
+    return '抓取失败';
   }
 }
