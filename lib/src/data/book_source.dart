@@ -23,6 +23,12 @@ class ComicChapterException implements Exception {
 abstract class BookContent {
   Future<String> chapterText(int index);
 
+  /// 这一章是否**已经在本地**（缓存命中就必然秒开，不该再转圈）。
+  ///
+  /// 阅读页据此决定：命中的章节不弹 loading（磁盘读几十毫秒，弹一下反而更慢）；
+  /// 没命中的才显示「加载中…」。实现必须是同步的、极轻的（只 stat 文件）。
+  bool isCached(int index) => false;
+
   Future<void> dispose() async {}
 }
 
@@ -33,6 +39,10 @@ class TxtBookContent implements BookContent {
   final Book book;
   String? _text;
   Future<String>? _loading;
+
+  /// 本地文件，读起来就是毫秒级 —— 永远算「命中」。
+  @override
+  bool isCached(int index) => index >= 0 && index < book.chapters.length;
 
   Future<String> _ensureText() {
     final cached = _text;
@@ -73,6 +83,18 @@ class EpubBookContent implements BookContent {
     '${store.chapterCacheDir(book.id).path}/'
     'ch_${index.toString().padLeft(4, '0')}.txt',
   );
+
+  @override
+  bool isCached(int index) {
+    if (index < 0 || index >= book.chapters.length) return false;
+    if (_memo.containsKey(index)) return true;
+    try {
+      final f = _cacheFile(index);
+      return f.existsSync() && f.lengthSync() > 0;
+    } catch (_) {
+      return false;
+    }
+  }
 
   @override
   Future<String> chapterText(int index) async {
@@ -139,6 +161,19 @@ class OnlineBookContent implements BookContent {
     'ch_v2_${index.toString().padLeft(4, '0')}.txt',
   );
 
+  /// 只有真的落过盘（文件非空）才算命中；内存里的 memo 也算。
+  @override
+  bool isCached(int index) {
+    if (index < 0 || index >= book.chapters.length) return false;
+    if (_memo.containsKey(index)) return true;
+    try {
+      final f = _cacheFile(index);
+      return f.existsSync() && f.lengthSync() > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
   @override
   Future<String> chapterText(int index) async {
     if (index < 0 || index >= book.chapters.length) return '';
@@ -183,9 +218,7 @@ class OnlineBookContent implements BookContent {
       } catch (e) {
         if (e is ComicChapterException) rethrow;
       }
-      throw StateError(
-        '正文为空（站点可能拦截或改版）。如果这是漫画，请到「搜书」切到「漫画源」重新找这本书',
-      );
+      throw StateError('正文为空（站点可能拦截或改版）。如果这是漫画，请到「搜书」切到「漫画源」重新找这本书');
     }
     try {
       await file.parent.create(recursive: true);

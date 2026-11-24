@@ -1,7 +1,9 @@
-// 缓存范围 / 追更合并 的单元测试。
+﻿// 缓存范围 / 追更合并 / 缓存命中判定的单元测试。
 //
-// 对应需求（用户原话）：「这个缓存的章节不能有我们决定嘛，比如全部缓存，
-// 或者从当前章节缓存到最新（并且开启自动追剧模式缓存）」。
+// 对应需求（用户原话）：
+//   「这个缓存的章节不能有我们决定嘛，比如全部缓存，或者从当前章节缓存到最新
+//    （并且开启自动追剧模式缓存）」
+//   「缓存完了的章节不应该是秒开么，为什么还要转圈」
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +13,7 @@ import 'package:sakura_read/src/data/cache_plan.dart';
 import 'package:sakura_read/src/data/cache_tracker.dart';
 import 'package:sakura_read/src/data/models.dart';
 import 'package:sakura_read/src/data/offline_downloader.dart';
+import 'package:sakura_read/src/platform/native_bridge.dart';
 
 /// 正序目录（小说）：第 1 章在前。
 Book _novel(
@@ -32,7 +35,7 @@ Book _novel(
   cachePlan: plan ?? BookCachePlan.defaults,
 );
 
-/// 降序目录（漫画）：最新一话在前。
+/// 降序目录（漫画）：最新一话在前。第 N 话在索引 count-N。
 Book _manga(
   int count, {
   BookCachePlan? plan,
@@ -81,6 +84,41 @@ void main() {
       expect(plan.indices, [9, 8, 7, 6]);
     });
 
+    test('漫画（降序目录）第 1152 话 → 最新：只有 35 话，先下更新的', () {
+      // 1187 话、最新话在前（第 N 话在索引 1187-N）：
+      // 第 1152 话 = 索引 34；比它新的第 1153~1187 话在索引 0~33。
+      // 回归：0.41 第一版把方向算反，范围变成 [0..34] 却按「第 35 章」显示，
+      // 进度条 34/35 一下就 97%。
+      final plan = buildCachePlan(
+        _manga(
+          1187,
+          plan: const BookCachePlan(mode: CacheMode.from, start: 34),
+        ),
+      );
+      expect(plan.total, 35);
+      expect(plan.range.first, 0);
+      expect(plan.range.last, 34);
+      // 最新那头先下（第 1187 话），再往回补到第 1152 话
+      expect(plan.indices.take(2), [0, 1]);
+    });
+
+    test('漫画（降序目录）第 35 话 → 最新：起点在最旧那头，覆盖 1153 话', () {
+      // 第 35 话 = 索引 1152（几乎是最旧的一话）；「到最新」= 索引 0..1152。
+      // 这条保证边界不越界，而不是又变成整本 1187 话。
+      final plan = buildCachePlan(
+        _manga(
+          1187,
+          plan: const BookCachePlan(mode: CacheMode.from, start: 1152),
+        ),
+      );
+      expect(plan.total, 1153);
+      expect(plan.range.first, 0);
+      expect(plan.range.last, 1152);
+      // 最新那一话先下
+      expect(plan.indices.take(2), [0, 1]);
+      expect(plan.indices.last, 1152);
+    });
+
     test('从当前章到最新：起点默认取阅读进度', () {
       final plan = buildCachePlan(
         _novel(5, reading: 3, plan: const BookCachePlan(mode: CacheMode.from)),
@@ -93,25 +131,27 @@ void main() {
       final plan = buildCachePlan(
         _manga(8, plan: const BookCachePlan(mode: CacheMode.from, start: 3)),
       );
+      // 第 4 话（索引 3）→ 最新（索引 0）：4 话
       expect(plan.range, [0, 1, 2, 3]);
       expect(plan.indices, [0, 1, 2, 3]);
     });
 
-    test('一段区间：正反输入都能容忍', () {
+    test('一段区间：正反输入都能容忍，且先下更新的', () {
       final a = buildCachePlan(
         _novel(
           10,
           plan: const BookCachePlan(mode: CacheMode.range, start: 2, end: 4),
         ),
       );
-      expect(a.indices, [2, 3, 4]);
+      expect(a.range, [2, 3, 4]);
+      expect(a.indices, [4, 3, 2]);
       final b = buildCachePlan(
         _novel(
           10,
           plan: const BookCachePlan(mode: CacheMode.range, start: 4, end: 2),
         ),
       );
-      expect(b.indices, [2, 3, 4]);
+      expect(b.indices, [4, 3, 2]);
     });
 
     test('不缓存：什么章都不下', () {
@@ -183,6 +223,45 @@ void main() {
     });
   });
 
+  group('缓存命中判定（阅读页据此决定要不要转圈）', () {
+    test('磁盘上有正文文件才算命中；空文件 / 没有都不算', () async {
+      final tmp = await Directory.systemTemp.createTemp('sakura_is_cached');
+      addTearDown(() async {
+        try {
+          await tmp.delete(recursive: true);
+        } catch (_) {}
+      });
+      final store = BookStore(
+        dirsOverride: AppDirs(files: tmp.path, cache: tmp.path),
+      );
+      await store.load();
+      addTearDown(store.dispose);
+      final book = _novel(3, id: 'hit');
+      final content = OnlineBookContent(book, store);
+      addTearDown(content.dispose);
+
+      expect(content.isCached(0), isFalse);
+      _writeCache(store.chapterCacheDir('hit'), 0, '');
+      expect(content.isCached(0), isFalse, reason: '0 字节不算');
+      _writeCache(store.chapterCacheDir('hit'), 0, '正文');
+      expect(content.isCached(0), isTrue);
+      expect(content.isCached(1), isFalse);
+      expect(content.isCached(-1), isFalse);
+      expect(content.isCached(99), isFalse);
+    });
+
+    test('TXT 永远算命中（本地文件，毫秒级）', () {
+      final txt = Book(
+        id: 't',
+        title: '本地',
+        format: BookFormat.txt,
+        path: '/tmp/a.txt',
+        chapters: [ChapterRef(title: 'c1', start: 0, end: 3)],
+      );
+      expect(TxtBookContent(txt).isCached(0), isTrue);
+    });
+  });
+
   group('CacheTracker：抓新章 → 下好 → 才并入目录', () {
     late BookStore store;
     late Directory cacheDir;
@@ -207,7 +286,6 @@ void main() {
     test('新章下好后才出现在目录里，且进缓存', () async {
       final book = _novel(3, id: 'tracked');
       store.addOnline(book);
-      // 已缓存前 3 章
       for (var i = 0; i < 3; i++) {
         _writeCache(cacheDir, i, '正文$i');
       }
@@ -231,7 +309,6 @@ void main() {
       expect(after.chapterCount, 5);
       expect(after.chapterCache.containsAll({0, 1, 2, 3, 4}), isTrue);
       expect(after.discoveredChapters, isEmpty);
-      // 阅读进度按链接找回来，没有被新章挤歪
       expect(after.chapterIndex, 0);
     });
 
@@ -277,7 +354,6 @@ void main() {
       final r = await tracker.trackOne('tracked');
       expect(r.skipped, isTrue);
       expect(fetched, 0);
-      // force 可以强制查
       await tracker.trackOne('tracked', force: true);
       expect(fetched, 1);
     });

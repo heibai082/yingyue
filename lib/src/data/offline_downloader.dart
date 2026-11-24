@@ -14,6 +14,7 @@
 import 'dart:async';
 
 import 'book_source.dart';
+import 'comic_image_cache.dart';
 import 'book_store.dart';
 import 'models.dart';
 
@@ -189,11 +190,22 @@ class OfflineDownloader {
               done++;
             }
           } on ComicChapterException catch (e) {
-            // 漫画章节：正文抽不出来是正常的，图片清单已经落地（翻页直接出图）
+            // 漫画章节：正文抽不出来是正常的。真正的「缓存」= 图片字节落盘，
+            // 只存 URL 清单的话下次进来还是要一张张联网（用户反馈的转圈）。
             if (e.images.isEmpty) {
               fail('这一话没取到图片');
             } else {
-              done++;
+              final saved = await cacheComicImages(
+                store,
+                book.id,
+                book.chapters[index].href ?? '',
+                e.images,
+              );
+              if (saved > 0) {
+                done++;
+              } else {
+                fail('图片下载失败');
+              }
             }
           } catch (e) {
             fail(_shortReason(e));

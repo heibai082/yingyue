@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -708,6 +708,13 @@ class _OfflineCard extends StatelessWidget {
   final VoidCallback onCancel;
   final VoidCallback onClear;
 
+  /// 进度条：范围内已下好的章 / 范围内总章数（不是「本次任务的百分比」）。
+  double _bookFraction(OfflineDownloadProgress p) {
+    final rangeTotal = p.total + p.cachedBefore;
+    if (rangeTotal <= 0) return p.finished ? 1 : 0;
+    return ((p.done + p.failed + p.cachedBefore) / rangeTotal).clamp(0.0, 1.0);
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -808,7 +815,12 @@ class _OfflineCard extends StatelessWidget {
           if (downloading) ...[
             ClipRRect(
               borderRadius: BorderRadius.circular(6),
-              child: LinearProgressIndicator(value: p.fraction, minHeight: 7),
+              child: LinearProgressIndicator(
+                // 按「这本书的位置」画：漫画从第 35 话缓存到最新只下 35 话，
+                // 光看 34/35 会以为是整本快下完了。
+                value: _bookFraction(p),
+                minHeight: 7,
+              ),
             ),
             const SizedBox(height: 6),
             Row(

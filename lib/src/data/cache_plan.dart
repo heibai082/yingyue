@@ -1,16 +1,21 @@
-// 缓存范围 → 具体要下哪几章（纯函数，无 IO，方便单测）。
+﻿// 缓存范围 → 具体要下哪几章（纯函数，无 IO，方便单测）。
 //
 // 用户反馈：「这个缓存的章节不能有我们决定嘛，比如全部缓存，或者从当前章节
 // 缓存到最新（并且开启自动追剧模式缓存）」。
 //
-// 三种范围的区别只在「选中哪些章 + 先下哪几章」：
+// 四种范围的区别只在「选中哪些章 + 先下哪几章」：
 //   - 全部：整本都下（老的「缓存整本」）；
 //   - 从当前章到最新：只下「往后」的部分，前面读过的不管；新章出来继续补；
 //   - 一段区间：只要第 X~Y 章；
 //   - 不缓存：本章集会空，调用方据此关掉预取。
 //
+// ⚠️ 「往后」要按**阅读顺序**算，不是按索引大小：
+//   漫画目录是「最新话在前」（降序），索引 0 才是最新的一话。第 35 话在
+//   索引 1152 上，「从第 35 话到最新」= 索引 [1152..1186] 这 35 话。
+//   （0.41 第一版错写成 [0..1152] = 第 1~35 话，于是进度条一下就到 97%。）
+//
 // 下载顺序统一是「离要读的地方近的先下」：
-//   全部 → 当前章之后（正序）优先，再回头补前面的；
+//   全部 → 当前章之后（按阅读方向）优先，再回头补前面的；
 //   从当前 → 最新章优先（追更最先看到的就是新章），再往回补到起点。
 import '../source/chapter_order.dart';
 import 'models.dart';
@@ -39,6 +44,14 @@ class CacheDownloadPlan {
 
   /// 范围内总章数。
   int get total => range.length;
+
+  /// 范围里最靠「最新」的那一章的序号（降序目录是 0）。
+  int get newestIndex =>
+      range.isEmpty ? 0 : (range.first < range.last ? range.first : range.last);
+
+  /// 范围里最靠「最旧」的那一章的序号。
+  int get oldestIndex =>
+      range.isEmpty ? 0 : (range.first < range.last ? range.last : range.first);
 }
 
 /// 计算这本书按当前缓存偏好要下哪些章、按什么顺序下。
@@ -61,11 +74,9 @@ CacheDownloadPlan buildCachePlan(
 
   final newest = newestFirst ?? looksNewestFirst(book.chapters);
   final have = cached ?? book.chapterCache;
-  final current = total == 0
-      ? 0
-      : (anchor ?? book.safeChapterIndex).clamp(0, total - 1);
+  final current = (anchor ?? book.safeChapterIndex).clamp(0, total - 1);
 
-  // 1) 先算出「范围内的章节区间」[lo, hi]
+  // 1) 范围内的章节区间 [lo, hi]（按目录索引升序；阅读方向留给排优先级）
   int lo;
   int hi;
   switch (cfg.mode) {
@@ -78,7 +89,10 @@ CacheDownloadPlan buildCachePlan(
     case CacheMode.from:
       final from = (cfg.start ?? current).clamp(0, total - 1);
       if (newest) {
-        // 降序目录：第 0 话最新，起点之后（更新）是 [0, from]
+        // 降序目录（漫画）：第 N 话在索引 from。阅读时「往后」是第 N+1 话、
+        // N+2 话……它们比第 N 话**新**，所以索引比 from 小；最新的一话在索引 0。
+        // 于是「从第 N 话到最新」= [0..from]（第 35 话 → 索引 1152，共 1153 话），
+        // 也就是自己这一话 + 比它新的全部。
         lo = 0;
         hi = from;
       } else {
@@ -92,6 +106,9 @@ CacheDownloadPlan buildCachePlan(
       hi = a < b ? b : a;
   }
 
+  // 降序目录里「阅读往后」= 索引变小，所以起点之后（更新）的那一头是 lo；
+  // 正序目录里「阅读往后」= 索引变大，是 hi。下面统一用阅读方向走。
+
   final range = [for (var i = lo; i <= hi; i++) i];
   final pending = {
     for (final i in range)
@@ -101,39 +118,46 @@ CacheDownloadPlan buildCachePlan(
     return CacheDownloadPlan(indices: const [], range: range, plan: cfg);
   }
 
-  // 2) 排优先级
+  // 2) 排优先级：一律按「阅读顺序」想问题
+  //    newestFirst=false：索引越大越新；newestFirst=true：索引越小越新。
+  final newerStep = newest ? -1 : 1;
+  final olderStep = -newerStep;
+  final newestFirstIndex = newest ? lo : hi;
+
   final order = <int>[];
   final seen = <int>{};
-  void take(Iterable<int> it) {
-    for (final i in it) {
-      if (pending.contains(i) && seen.add(i)) order.add(i);
-    }
+  void take(int i) {
+    if (i >= lo && i <= hi && pending.contains(i) && seen.add(i)) order.add(i);
   }
 
   switch (cfg.mode) {
     case CacheMode.all:
-      // 先把「当前章 → 最新」下好，再回头补前面的
-      if (newest) {
-        take([for (var i = current; i >= 0; i--) i]);
-        take([for (var i = current + 1; i < total; i++) i]);
-      } else {
-        take([for (var i = current; i < total; i++) i]);
-        take([for (var i = current - 1; i >= 0; i--) i]);
+      // 当前章 → 最新（顺着阅读方向），再回头补前面的
+      for (var i = current; i >= lo && i <= hi; i += newerStep) {
+        take(i);
+      }
+      for (var i = current + olderStep; i >= lo && i <= hi; i += olderStep) {
+        take(i);
       }
     case CacheMode.from:
-      // 追更最先要的是新章：降序 → 从 0 往起点补；正序 → 从最新往回补到起点
-      if (newest) {
-        take([for (var i = 0; i <= hi; i++) i]);
-      } else {
-        take([for (var i = total - 1; i >= lo; i--) i]);
+      // 追更最先要的是新章：从最靠「最新」的那头开始，往回补到起点为止
+      final newestSide = newest ? hi : lo;
+      for (var i = newestFirstIndex; i >= lo && i <= hi; i += olderStep) {
+        take(i);
+        if (i == newestSide) break;
       }
     case CacheMode.range:
-      take([for (var i = lo; i <= hi; i++) i]);
+      // 固定区间：按阅读顺序（最新那头先下）
+      for (var i = newestFirstIndex; i >= lo && i <= hi; i += olderStep) {
+        take(i);
+      }
     case CacheMode.off:
       break;
   }
-  // 兜底：区间里若有没被上面覆盖到的，按升序补上（防御未来加模式忘写分支）
-  take(range);
+  // 兜底：区间里若有没被上面覆盖到的，按阅读顺序补上
+  for (var i = newestFirstIndex; i >= lo && i <= hi; i += olderStep) {
+    take(i);
+  }
 
   return CacheDownloadPlan(indices: order, range: range, plan: cfg);
 }

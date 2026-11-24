@@ -1,4 +1,4 @@
-import 'comic_reader_page.dart';
+﻿import 'comic_reader_page.dart';
 import 'epub_document_page.dart';
 
 import 'dart:async';
@@ -69,6 +69,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   int _pageIndex = 0;
   int _targetOffset = 0;
   bool _loading = true;
+
+  /// 章节加载代号：快速连翻时只让最后那次决定转圈 / 出字（防串台）。
+  int _loadGen = 0;
   bool _revealed = false;
   bool _paginationComplete = false;
   String? _error;
@@ -332,17 +335,34 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   // ---------- 内容加载 ----------
 
   Future<void> _loadChapter({bool revealBars = false}) async {
+    final book0 = _book;
+    _content ??= book0 == null ? null : createBookContent(book0, widget.store);
+    // 缓存命中（磁盘上有这一章）→ 不弹「加载中」：读盘只要几十毫秒，
+    // 先闪一下转圈再出字反而更慢。没命中的才立刻显示转圈（联网可能几秒）。
+    final hit = _content?.isCached(_chapterIndex) ?? false;
+    final gen = ++_loadGen;
+    // 极慢的情况下（缓存正被别的任务占着 / 章节特别长）也要有反馈：
+    // 120ms 还没换上正文，再补个转圈。
+    Timer? slowTimer;
     setState(() {
-      _loading = true;
-      _revealed = false;
-      _paginationComplete = false;
+      _loading = !hit;
+      if (!hit) {
+        _revealed = false;
+        _paginationComplete = false;
+      }
       _error = null;
       if (revealBars) _barsVisible = true;
     });
+    if (hit) {
+      slowTimer = Timer(const Duration(milliseconds: 120), () {
+        if (mounted && gen == _loadGen && _loading == false) {
+          setState(() => _loading = true);
+        }
+      });
+    }
     try {
       final book = _book;
       if (book == null) throw '这本书不在书架里了';
-      _content ??= createBookContent(book, widget.store);
       // 插图目录（EPUB 专用；图片在导入时已抽到 <cacheDir>/img/）
       final imgDir = '${widget.store.chapterCacheDir(book.id).path}/img';
       if (mounted) {
@@ -352,6 +372,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       final rawCached = raw != null;
       raw ??= await _content!.chapterText(_chapterIndex);
       _rawTextCache[_chapterIndex] = raw;
+      slowTimer?.cancel();
       if (!mounted) return;
       _chapterText = _processText(_chapterIndex, raw);
       _layoutSig = '';
@@ -389,6 +410,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         unawaited(_ensureXray());
       }
     } catch (e) {
+      slowTimer?.cancel();
       if (!mounted) return;
       // 这一章其实是图片（漫画 / 图楼）：直接切到漫画页，别卡在「正文为空」
       if (e is ComicChapterException) {

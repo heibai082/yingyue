@@ -1,4 +1,4 @@
-﻿// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
+// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
 //
 // 设计取舍：
 //   - 不做分页手势（左右滑），先做「一条长图往下滚」，和站点本身一致，
@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../data/book_store.dart';
+import '../../data/comic_image_cache.dart';
 import '../../data/models.dart';
 import '../../data/prefs.dart';
 import '../../source/analyze_url.dart';
@@ -174,6 +175,10 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
     widget.store.updateProgress(book.id, chapter: index, offset: 0);
     _warmFirstPages(urls);
     unawaited(_stripAdsInBackground(href, urls));
+    // 缓存整话的图片：下次进来（甚至断网）直接从磁盘出图，不再一张张转圈
+    if (widget.prefs.autoPrefetchChapters) {
+      unawaited(_cacheChapterImages(book.id, href, urls));
+    }
     // 默认往后缓存两章：看完这一话点「下一话」基本秒开
     if (widget.prefs.autoPrefetchChapters) {
       final step = olderStep(book.chapters);
@@ -181,6 +186,28 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
         // 「下一话」的方向（漫画是索引 -1）
         unawaited(_prefetch(index - step * d));
       }
+    }
+  }
+
+  /// 正在把这几个章节的图片落盘（避免滚动时同一话重复排队）。
+  static final Set<String> _imageCaching = {};
+  static final Set<String> _imageCachedBooks = {};
+
+  /// 把这一话的图片按顺序下到磁盘（.part → 改名），不挡阅读。
+  Future<void> _cacheChapterImages(
+    String bookId,
+    String href,
+    List<String> urls,
+  ) async {
+    if (urls.isEmpty) return;
+    if (!_imageCaching.add(href)) return;
+    try {
+      await cacheComicImages(widget.store, bookId, href, urls);
+      _imageCachedBooks.add(href);
+    } catch (_) {
+      // 网络不好就先算了，滚动浏览时还会顺手下到
+    } finally {
+      _imageCaching.remove(href);
     }
   }
 
@@ -441,28 +468,20 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
         ),
       );
     }
+    final href = _hrefOf(_chapterIndex);
     return ListView.builder(
       controller: _scroll,
       itemCount: _images.length,
       itemBuilder: (context, i) => Padding(
         padding: const EdgeInsets.only(bottom: 2),
-        child: Image.network(
-          _images[i],
-          fit: BoxFit.fitWidth,
-          loadingBuilder: (context, child, progress) {
-            if (progress == null) return child;
-            final p = progress.expectedTotalBytes;
-            return AspectRatio(
-              aspectRatio: 3 / 4,
-              child: Center(
-                child: CircularProgressIndicator(
-                  value: p == null ? null : progress.cumulativeBytesLoaded / p,
-                  strokeWidth: 2,
-                ),
-              ),
-            );
-          },
-          errorBuilder: (context, error, stack) => Padding(
+        // 缓存过的章节：图片直接从磁盘出（不转圈）；没缓存才走网络 + 顺手落盘
+        child: ComicImage(
+          store: widget.store,
+          bookId: widget.bookId,
+          href: href,
+          index: i,
+          url: _images[i],
+          errorBuilder: (context, error) => Padding(
             padding: const EdgeInsets.all(12),
             child: Text(
               '第 ${i + 1} 张加载失败（长按重试）',
@@ -472,6 +491,16 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
           ),
         ),
       ),
+    );
+  }
+
+  /// 这一话的章节链接（图片缓存按它分目录）。
+  String _hrefOf(int index) {
+    final book = _book;
+    if (book == null || index < 0 || index >= book.chapters.length) return '';
+    return resolveUrl(
+      book.chapters[index].href ?? '',
+      widget.source.bookSourceUrl,
     );
   }
 
