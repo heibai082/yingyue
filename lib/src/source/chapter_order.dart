@@ -8,21 +8,9 @@
 // 这里按「章节序号」去重并统一排序；认不出序号的目录原样返回，绝不乱动。
 import '../data/models.dart';
 
-/// 取章节序号：优先链接里的 `chapter_slot=123` / 末尾数字，其次标题里的「第123话」。
-int? chapterNumber(ChapterRef chapter) {
-  final href = chapter.href ?? '';
-  final slot = RegExp(
-    r'chapter_slot=(\d+)',
-    caseSensitive: false,
-  ).firstMatch(href);
-  if (slot != null) return int.tryParse(slot.group(1)!);
-  final title = chapter.title;
-  final cn = RegExp(r'第\s*(\d+)\s*[话話章集回卷篇]').firstMatch(title);
-  if (cn != null) return int.tryParse(cn.group(1)!);
-  final tail = RegExp(r'(\d+)(?!.*\d)').firstMatch(href);
-  if (tail != null) return int.tryParse(tail.group(1)!);
-  return null;
-}
+// chapterNumber / looksNewestFirst 现在住在 models.dart（Book.progress 也要用），
+// 这里原样转出去，老的 import 不用改。
+export '../data/models.dart' show chapterNumber, looksNewestFirst;
 
 /// 归一化目录顺序。
 ///
@@ -65,15 +53,6 @@ List<ChapterRef> normalizeChapterOrder(
     return byNum != 0 ? byNum : a.$1.compareTo(b.$1);
   });
   return [for (final e in indexed) e.$2];
-}
-
-/// 这本书的目录看起来是不是「最新话在前」。用来决定要不要重排已存在的老数据。
-bool looksNewestFirst(List<ChapterRef> chapters) {
-  if (chapters.length < 2) return false;
-  final first = chapterNumber(chapters.first);
-  final last = chapterNumber(chapters.last);
-  if (first == null || last == null) return false;
-  return first > last;
 }
 
 /// 目录是「最新话在前」（漫画）时，往**更早**的话翻是索引 +1；

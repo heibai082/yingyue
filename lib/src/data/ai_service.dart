@@ -114,7 +114,7 @@ class ReadingSnapshot {
         final book = list[i];
         final progress = (book.progress * 100).round();
         final chapter = book.chapterCount > 0
-            ? '（第 ${book.safeChapterIndex + 1}/${book.chapterCount} 章'
+            ? '（第 ${readingChapterNumber(book.chapters, book.safeChapterIndex)}/${book.chapterCount} 章'
                   '${book.chapter == null ? '' : '「${book.chapter!.title}」'}）'
             : '';
         final tail = <String>[];
@@ -303,7 +303,9 @@ class AiService {
       // 会直接 400。这时去掉 temperature 再试一次，别让用户对着报错干瞪眼。
       if (resp.statusCode == 400 &&
           resp.body.toLowerCase().contains('temperature')) {
-        resp = await send(Map<String, dynamic>.from(payload)..remove('temperature'));
+        resp = await send(
+          Map<String, dynamic>.from(payload)..remove('temperature'),
+        );
       }
     } on TimeoutException {
       throw AiException('请求超时了，检查一下网络，或稍后再试');

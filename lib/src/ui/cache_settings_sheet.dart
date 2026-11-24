@@ -229,7 +229,7 @@ class _BookCacheSettingsSheetState extends State<BookCacheSettingsSheet> {
         TextButton(
           onPressed: onTap,
           child: Text(
-            '第 ${(value + 1).clamp(1, _total <= 0 ? 1 : _total)} 章',
+            '第 ${readingChapterNumber(book.chapters, value)} 章',
             style: const TextStyle(fontSize: 12.5),
           ),
         ),
@@ -272,7 +272,9 @@ class _BookCacheSettingsSheetState extends State<BookCacheSettingsSheet> {
               mode: CacheMode.from,
               icon: Icons.auto_mode_rounded,
               title: '从当前章缓存到最新',
-              desc: '只下「第 ${current + 1} 章 → 最新」，新章出来自动补（追更）',
+              desc:
+                  '只下「第 ${readingChapterNumber(book.chapters, current)} 章 → 最新」，'
+                  '新章出来自动补（追更）',
             ),
             option(
               mode: CacheMode.range,

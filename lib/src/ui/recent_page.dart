@@ -167,7 +167,9 @@ class _RecentTile extends StatelessWidget {
     final parts = <String>[];
     final chapter = book.chapter;
     if (chapter != null) {
-      parts.add('第 ${book.safeChapterIndex + 1} 章 · ${chapter.title}');
+      parts.add(
+        '第 ${readingChapterNumber(book.chapters, book.safeChapterIndex)} 章 · ${chapter.title}',
+      );
     }
     parts.add('已读 ${book.progressLabel}');
     parts.add(timeAgo(book.lastReadAt));

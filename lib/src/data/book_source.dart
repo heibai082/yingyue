@@ -206,7 +206,9 @@ class OnlineBookContent implements BookContent {
     final chapter = book.chapters[index];
     final href = (chapter.href ?? '').trim();
     if (href.isEmpty) {
-      throw StateError('章节缺少链接（第 ${index + 1} 章）');
+      throw StateError(
+        '章节缺少链接（第 ${readingChapterNumber(book.chapters, index)} 章）',
+      );
     }
     final text = await _service.fetchChapterText(source, href);
     if (text.trim().isEmpty) {

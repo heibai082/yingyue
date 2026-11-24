@@ -660,7 +660,7 @@ class _Actions extends StatelessWidget {
               book.finished
                   ? '重新阅读'
                   : started
-                  ? '继续阅读 · ${book.chapter?.title ?? '第 ${book.safeChapterIndex + 1} 章'}'
+                  ? '继续阅读 · ${book.chapter?.title ?? '第 ${readingChapterNumber(book.chapters, book.safeChapterIndex)} 章'}'
                   : '开始阅读',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -724,6 +724,8 @@ class _OfflineCard extends StatelessWidget {
     final downloading = p != null;
     final plan = book.cachePlan;
     final off = plan.isOff;
+    // 降序目录（漫画）里「第 N 章」的编号不是索引 +1
+    final newestFirst = looksNewestFirst(book.chapters);
 
     // 文案：先回答「缓存哪一段」，再回答「存了多少」
     final String hint;
@@ -732,13 +734,13 @@ class _OfflineCard extends StatelessWidget {
     } else if (off) {
       hint = '这本书不自动缓存（阅读时也不再预取）';
     } else if (plan.mode == CacheMode.from) {
-      final n = ((plan.start ?? book.safeChapterIndex) + 1).clamp(
-        1,
-        total <= 0 ? 1 : total,
+      final n = readingChapterNumber(
+        book.chapters,
+        plan.start ?? book.safeChapterIndex,
       );
       hint = '从第 $n 章缓存到最新，新章自动补';
     } else if (plan.mode == CacheMode.range) {
-      hint = '只缓存 ${plan.describe(total)}';
+      hint = '只缓存 ${plan.describe(total, newestFirst: newestFirst)}';
     } else {
       hint = '提前缓存整本，没网时也能接着看';
     }
@@ -796,7 +798,7 @@ class _OfflineCard extends StatelessWidget {
                   const SizedBox(width: 5),
                   Expanded(
                     child: Text(
-                      '范围：${plan.describe(total)}',
+                      '范围：${plan.describe(total, newestFirst: newestFirst)}',
                       style: TextStyle(
                         fontSize: 11.5,
                         color: scheme.onSurfaceVariant,
@@ -827,7 +829,7 @@ class _OfflineCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    '正在缓存第 ${p.currentChapter + 1} 章 · '
+                    '正在缓存第 ${readingChapterNumber(book.chapters, p.currentChapter)} 章 · '
                     '${p.done}/${p.total}'
                     '${p.failed > 0 ? '（${p.failed} 章失败）' : ''}',
                     style: TextStyle(
@@ -961,9 +963,8 @@ class _ChapterTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final chapter = book.chapters[index];
     final isCurrent = index == book.safeChapterIndex && book.lastReadAt > 0;
-    final isRead =
-        index < book.safeChapterIndex ||
-        (index == book.safeChapterIndex && book.finished);
+    // 「已读」按阅读顺序判断（漫画目录降序，比当前话新的其实还没读）
+    final isRead = isChapterRead(book, index);
     return Material(
       color: isCurrent ? scheme.primary.withValues(alpha: .12) : scheme.surface,
       borderRadius: BorderRadius.circular(14),

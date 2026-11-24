@@ -1,5 +1,70 @@
 import 'dart:math';
 
+/// 取章节序号：优先链接里的 `chapter_slot=123` / 末尾数字，其次标题里的「第123话」。
+///
+/// 放在 models.dart 是因为 [Book.progress] 也要用：漫画目录是「最新话在前」的
+/// 降序，进度必须按**阅读顺序**算，不能直接拿索引除以章数。
+int? chapterNumber(ChapterRef chapter) {
+  final href = chapter.href ?? '';
+  final slot = RegExp(
+    r'chapter_slot=(\d+)',
+    caseSensitive: false,
+  ).firstMatch(href);
+  if (slot != null) return int.tryParse(slot.group(1)!);
+  final title = chapter.title;
+  final cn = RegExp(r'第\s*(\d+)\s*[话話章集回卷篇]').firstMatch(title);
+  if (cn != null) return int.tryParse(cn.group(1)!);
+  final tail = RegExp(r'(\d+)(?!.*\d)').firstMatch(href);
+  if (tail != null) return int.tryParse(tail.group(1)!);
+  return null;
+}
+
+/// 目录是不是「最新话在前」（漫画源常见）。
+///
+/// 只看首尾两章的序号：降序目录（1186 → … → 1）首章序号比末章大。
+bool looksNewestFirst(List<ChapterRef> chapters) {
+  if (chapters.length < 2) return false;
+  final first = chapterNumber(chapters.first);
+  final last = chapterNumber(chapters.last);
+  if (first == null || last == null) return false;
+  return first > last;
+}
+
+/// 阅读顺序上的位置（0 = 全书最开头，[total] = 全书读完）。
+///
+/// 正序目录（小说）：位置 = 索引；降序目录（漫画）：位置 = 总章数 - 1 - 索引。
+/// 例：1187 话的漫画读到第 1152 话（索引 34）→ 位置 1152 → 进度 97%。
+double readingPosition(
+  List<ChapterRef> chapters,
+  int index,
+  double localFraction,
+) {
+  final total = chapters.length;
+  if (total == 0) return 0;
+  final i = index.clamp(0, total - 1);
+  final local = localFraction.clamp(0.0, 1.0);
+  return looksNewestFirst(chapters) ? (total - 1 - i) + local : i + local;
+}
+
+/// 目录里的「第几章 / 第几话」：正序 = 索引 + 1；降序（漫画）= 总章数 - 索引。
+///
+/// 只用来显示（顶栏「第 x/y 章」、缓存进度「正在缓存第 x 章」），不参与逻辑。
+int readingChapterNumber(List<ChapterRef> chapters, int index) {
+  final total = chapters.length;
+  if (total == 0) return 0;
+  final i = index.clamp(0, total - 1);
+  return looksNewestFirst(chapters) ? total - i : i + 1;
+}
+
+/// 这一章算不算「已读」（按阅读顺序，不看索引大小）。
+///
+/// 漫画目录降序时，比当前话**新**的那些（索引更小）其实还没读，不能打勾。
+bool isChapterRead(Book book, int index) {
+  final cur = book.safeChapterIndex;
+  if (index == cur) return book.finished;
+  return looksNewestFirst(book.chapters) ? index > cur : index < cur;
+}
+
 /// 书籍格式。
 enum BookFormat { txt, epub, online }
 
@@ -73,27 +138,30 @@ class BookCachePlan {
   }
 
   /// 给用户看的一句话（详情页 / 提示用）。
-  String describe(int chapterCount) {
+  ///
+  /// [newestFirst]：目录是不是降序（漫画）。降序时「第 N 章」的编号是
+  /// 总章数 - 索引，不能直接拿索引 +1（否则会把第 1152 话写成第 35 章）。
+  String describe(int chapterCount, {bool newestFirst = false}) {
+    String no(int index) {
+      final total = chapterCount <= 0 ? 1 : chapterCount;
+      final i = index.clamp(0, total - 1);
+      final n = newestFirst ? total - i : i + 1;
+      return '第 $n 章';
+    }
+
     switch (mode) {
       case CacheMode.all:
         return '全部章节（共 $chapterCount 章）';
       case CacheMode.off:
         return '不自动缓存';
       case CacheMode.from:
-        final n = ((start ?? 0) + 1).clamp(
-          1,
-          chapterCount <= 0 ? 1 : chapterCount,
-        );
-        return '第 $n 章 → 最新（自动追更）';
+        return '${no(start ?? 0)} → 最新（自动追更）';
       case CacheMode.range:
-        final a = ((start ?? 0) + 1).clamp(
-          1,
-          chapterCount <= 0 ? 1 : chapterCount,
-        );
-        final b = end == null
-            ? chapterCount
-            : ((end! + 1).clamp(1, chapterCount <= 0 ? 1 : chapterCount));
-        return '第 $a ~ $b 章';
+        final a = start ?? 0;
+        final b = end ?? (chapterCount <= 0 ? 0 : chapterCount - 1);
+        final lo = a < b ? a : b;
+        final hi = a < b ? b : a;
+        return '${no(lo)} ~ ${no(hi)}';
     }
   }
 
@@ -281,21 +349,30 @@ class Book {
       chapters.isEmpty ? null : chapters[safeChapterIndex];
 
   /// 阅读进度 0~1。
+  ///
+  /// 按**阅读顺序**算，不是按索引：漫画目录是降序（最新话在前），读到第 1152 话
+  /// 时索引是 34，直接 34/1187 会显示 3%，而实际已经读了 97%。
   double get progress {
     if (chapters.isEmpty) return 0;
     if (finished) return 1;
     final ch = chapters[safeChapterIndex];
     final local = ch.charCount > 0 ? charOffset / ch.charCount : 0.0;
-    return ((safeChapterIndex + local.clamp(0.0, 1.0)) / chapters.length)
-        .clamp(0.0, 1.0)
-        .toDouble();
+    final pos = readingPosition(chapters, safeChapterIndex, local);
+    return (pos / chapters.length).clamp(0.0, 1.0).toDouble();
   }
 
-  /// 已读字数（估算）。
+  /// 已读字数（估算）。同样是「阅读顺序上在当前位置之前的章节」。
   int get readChars {
     var n = 0;
-    for (var i = 0; i < safeChapterIndex && i < chapters.length; i++) {
-      n += chapters[i].charCount;
+    final i = safeChapterIndex;
+    if (looksNewestFirst(chapters)) {
+      for (var k = i + 1; k < chapters.length; k++) {
+        n += chapters[k].charCount;
+      }
+    } else {
+      for (var k = 0; k < i && k < chapters.length; k++) {
+        n += chapters[k].charCount;
+      }
     }
     return n + charOffset;
   }

@@ -28,6 +28,7 @@ import '../../data/xray.dart';
 import '../../platform/native_bridge.dart';
 import '../../platform/tts_service.dart';
 import '../../platform/url_launcher.dart';
+import '../../source/chapter_order.dart';
 import '../../source/source_store.dart';
 import '../cache_settings_sheet.dart';
 import '../source/source_switch_sheet.dart';
@@ -690,12 +691,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
     final flow = <_FlowPage>[];
     // 头部：上一章最后一页（用于往回翻的平滑衔接）
-    final prevPages = _cachedPagesOf(_chapterIndex - 1);
-    final prevText = _textOfChapter(_chapterIndex - 1);
-    if (prevPages != null && prevPages.isNotEmpty && prevText != null) {
-      flow.add(
-        _FlowPage(_chapterIndex - 1, _sliceText(prevText, prevPages.last)),
-      );
+    final older = _olderChapterIndex;
+    final newer = _newerChapterIndex;
+    final prevPages = older == null ? null : _cachedPagesOf(older);
+    final prevText = older == null ? null : _textOfChapter(older);
+    if (older != null &&
+        prevPages != null &&
+        prevPages.isNotEmpty &&
+        prevText != null) {
+      flow.add(_FlowPage(older, _sliceText(prevText, prevPages.last)));
     }
     final head = flow.length;
     // 本章全部页
@@ -704,11 +708,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       flow.add(_FlowPage(_chapterIndex, _sliceText(curText, p)));
     }
     // 下一章全部页（已预加载时纳入，可以连续向前翻过章界）
-    final nextPages = _cachedPagesOf(_chapterIndex + 1);
-    final nextText = _textOfChapter(_chapterIndex + 1);
-    if (nextPages != null && nextText != null) {
+    final nextPages = newer == null ? null : _cachedPagesOf(newer);
+    final nextText = newer == null ? null : _textOfChapter(newer);
+    if (newer != null && nextPages != null && nextText != null) {
       for (final p in nextPages) {
-        flow.add(_FlowPage(_chapterIndex + 1, _sliceText(nextText, p)));
+        flow.add(_FlowPage(newer, _sliceText(nextText, p)));
       }
     }
     final newIndex = (head + _pageIndex).clamp(0, flow.length - 1).toInt();
@@ -771,11 +775,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final local = _flowIndex - _flowChapterStart;
     if (local >= 0 && local < _pages.length) return; // 又翻回本章了
     if (local >= _pages.length) {
-      // —— 向前翻入下一章 ——
-      final nextIdx = _chapterIndex + 1;
+      // —— 向前翻入下一章（按阅读方向，漫画是索引 -1） ——
+      final nextIdx = _newerChapterIndex;
+      if (nextIdx == null) return;
       final nextPages = _cachedPagesOf(nextIdx);
       if (nextPages == null || nextPages.isEmpty) {
-        _goToChapter(nextIdx.clamp(0, book.chapterCount - 1), 0);
+        _goToChapter(nextIdx, 0);
         return;
       }
       final nextLocal = (local - _pages.length)
@@ -796,10 +801,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       unawaited(_preloadChapter(_chapterIndex - 1));
     } else {
       // —— 向后翻回上一章（落在最后一页） ——
-      final prevIdx = _chapterIndex - 1;
+      final prevIdx = _olderChapterIndex;
+      if (prevIdx == null) return;
       final prevPages = _cachedPagesOf(prevIdx);
       if (prevPages == null || prevPages.isEmpty) {
-        _goToChapter(prevIdx.clamp(0, book.chapterCount - 1), -1);
+        _goToChapter(prevIdx, -1);
         return;
       }
       setState(() {
@@ -1064,9 +1070,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     } else if (!_paginationComplete) {
       // 还在分页，稍等
     } else {
-      final book = _book;
-      if (book != null && _chapterIndex < book.chapterCount - 1) {
-        _goToChapter(_chapterIndex + 1, 0);
+      final next = _newerChapterIndex;
+      if (next != null) {
+        _goToChapter(next, 0);
       } else {
         _toastLate('已经读完最后一章啦 🎉');
       }
@@ -1080,8 +1086,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
     if (_flowIndex > 0) {
       _pagerKey.currentState?.animatePrev();
-    } else if (_chapterIndex > 0) {
-      _goToChapter(_chapterIndex - 1, -1);
+    } else {
+      final prev = _olderChapterIndex;
+      if (prev != null) _goToChapter(prev, -1);
     }
   }
 
@@ -1389,7 +1396,21 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     );
   }
 
-  /// 全书进度（0~1）。
+  /// 阅读顺序上的「更早一章 / 更新一章」。
+  ///
+  /// 漫画目录是降序（最新话在前）：更早的一话是索引 +1、更新的是 -1。
+  /// 所有翻章入口都走这两个 helper，新书（不管哪个源、哪种排序）都不会翻反。
+  int? get _olderChapterIndex {
+    final book = _book;
+    return book == null ? null : olderIndex(book.chapters, _chapterIndex);
+  }
+
+  int? get _newerChapterIndex {
+    final book = _book;
+    return book == null ? null : newerIndex(book.chapters, _chapterIndex);
+  }
+
+  /// 全书进度（0~1）。按阅读顺序算：漫画目录降序，索引不能直接除以章数。
   double get progress {
     final book = _book;
     if (book == null || book.chapterCount == 0) return 0;
@@ -1401,7 +1422,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         : (chapter.charCount > 0 && _pages.isNotEmpty
               ? (_currentOffset / chapter.charCount).clamp(0.0, 1.0)
               : 0.0);
-    return ((_chapterIndex + local) / book.chapterCount).clamp(0.0, 1.0);
+    return (readingPosition(book.chapters, _chapterIndex, local) /
+            book.chapterCount)
+        .clamp(0.0, 1.0);
   }
 
   /// 当前章节的来源网址（在线书）；无则 null。
@@ -1610,7 +1633,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                             )
                           else
                             Text(
-                              '第 ${_chapterIndex + 1}/${book.chapterCount} 章',
+                              '第 ${readingChapterNumber(book.chapters, _chapterIndex)}/${book.chapterCount} 章',
                               style: TextStyle(
                                 color: (dark ? Colors.white : Colors.black87)
                                     .withValues(alpha: .65),
@@ -1724,8 +1747,15 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                       _barButton(
                         icon: Icons.skip_previous_rounded,
                         label: '上一章',
-                        enabled: _chapterIndex > 0,
-                        onTap: () => _goToChapter(_chapterIndex - 1, 0),
+                        enabled:
+                            book != null &&
+                            olderIndex(book.chapters, _chapterIndex) != null,
+                        onTap: () {
+                          final i = book == null
+                              ? null
+                              : olderIndex(book.chapters, _chapterIndex);
+                          if (i != null) _goToChapter(i, 0);
+                        },
                       ),
                       _barButton(
                         icon: Icons.format_list_bulleted_rounded,
@@ -1760,8 +1790,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                         label: '下一章',
                         enabled:
                             book != null &&
-                            _chapterIndex < book.chapterCount - 1,
-                        onTap: () => _goToChapter(_chapterIndex + 1, 0),
+                            newerIndex(book.chapters, _chapterIndex) != null,
+                        onTap: () {
+                          final i = book == null
+                              ? null
+                              : newerIndex(book.chapters, _chapterIndex);
+                          if (i != null) _goToChapter(i, 0);
+                        },
                       ),
                     ],
                   ),
@@ -1802,10 +1837,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final book = _book;
     if (book == null || book.totalChars <= 0) return;
     final target = (value.clamp(0.0, 1.0) * book.totalChars).round();
+    // 按阅读顺序累加：漫画目录降序时，进度 0% = 最老的一话、100% = 最新一话
+    final newestFirst = looksNewestFirst(book.chapters);
     var acc = 0;
-    for (var i = 0; i < book.chapterCount; i++) {
+    for (var k = 0; k < book.chapterCount; k++) {
+      final i = newestFirst ? book.chapterCount - 1 - k : k;
       final count = book.chapters[i].charCount;
-      if (target <= acc + count || i == book.chapterCount - 1) {
+      if (target <= acc + count || k == book.chapterCount - 1) {
         final offset = (target - acc).clamp(0, count).toInt();
         _goToChapter(i, offset);
         return;
@@ -2132,7 +2170,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       return;
     }
     _toastLate('本章读完，继续下一章');
-    await _goToChapter(_chapterIndex + 1, 0);
+    final next = _newerChapterIndex;
+    if (next != null) await _goToChapter(next, 0);
     if (!mounted) return;
     await _restartTtsForChapter();
   }
@@ -2517,7 +2556,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                     ),
                   ),
                   Text(
-                    '第 ${_chapterIndex + 1} 章 · 点右侧按钮收藏当前位置',
+                    '第 ${readingChapterNumber(book.chapters, _chapterIndex)} 章 · 点右侧按钮收藏当前位置',
                     style: TextStyle(
                       fontSize: 11.5,
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
