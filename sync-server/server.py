@@ -374,6 +374,71 @@ def load_chapter(udir, path, index):
         return None
 
 
+def bookmeta_file(udir, path):
+    d = os.path.join(udir, "bookmeta")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, chapter_key(path) + ".json")
+
+
+def save_book_meta(udir, path, chapters, source_url=""):
+    try:
+        with open(bookmeta_file(udir, path), "w", encoding="utf-8") as f:
+            json.dump(
+                {"path": path, "sourceUrl": source_url, "chapters": chapters},
+                f,
+                ensure_ascii=False,
+            )
+    except Exception:
+        pass
+
+
+def load_book_meta(udir, path):
+    try:
+        with open(bookmeta_file(udir, path), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def add_book(udir, payload):
+    """把一本书加到服务器书架（网页端「加入书架」）。"""
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        raise ValueError("缺少书籍地址")
+    now = int(time.time() * 1000)
+    chapters = payload.get("chapters") or []
+    st = load_state(udir)
+    books = st.get("books") or []
+    for b in books:
+        if b.get("path") == path:
+            b["title"] = payload.get("title") or b.get("title") or path
+            if payload.get("author"):
+                b["author"] = payload["author"]
+            if chapters:
+                b["total"] = len(chapters)
+            b["lastReadAt"] = now
+            break
+    else:
+        books.append({
+            "path": path,
+            "id": chapter_key(path),
+            "title": payload.get("title") or path,
+            "author": payload.get("author") or "",
+            "chapterIndex": 0,
+            "charOffset": 0,
+            "lastReadAt": now,
+            "finished": False,
+            "group": payload.get("group") or "",
+            "total": len(chapters) if chapters else (payload.get("total") or 0),
+            "format": "online",
+        })
+    st["books"] = books
+    st["updatedAt"] = now
+    save_state(udir, st)
+    if chapters:
+        save_book_meta(udir, path, chapters, payload.get("sourceUrl") or "")
+    return len(books)
+
 def chapter_index(udir):
     """返回 {bookPath: [章号]}，只扫文件名，快。"""
     root = chapters_dir(udir)
@@ -632,7 +697,11 @@ class Handler(BaseHTTPRequestHandler):
                 "bookmarks": len(st.get("bookmarks", [])),
                 "bookmarkItems": (st.get("bookmarks") or [])[:300],
                 "devices": st.get("devices", {}),
-                "recent": (st.get("books") or [])[:30],
+                "recent": sorted(
+                    st.get("books") or [],
+                    key=lambda b: int(b.get("lastReadAt") or 0),
+                    reverse=True,
+                )[:30],
                 "backups": list_backups(udir),
                 "stats": st.get("stats", {}),
             })
@@ -697,12 +766,26 @@ class Handler(BaseHTTPRequestHandler):
                 )
             except Exception:
                 return self._send(502, b"")
+        if path == "/api/books/meta":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            p = (q.get("path") or [""])[0]
+            meta = load_book_meta(udir, p)
+            if not meta:
+                return self._json({"chapters": []})
+            return self._json(meta)
         if path == "/api/chapters/index":
             return self._json({"items": chapter_index(udir)})
         if path == "/api/chapters/list":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             p = (q.get("path") or [""])[0]
             return self._json({"items": list_chapters(udir, p)})
+        if path == "/api/books":
+            try:
+                payload = json.loads(self._body().decode("utf-8-sig") or "{}")
+                total = add_book(udir, payload)
+                return self._json({"ok": True, "books": total})
+            except Exception as e:
+                return self._json({"error": str(e)}, 400)
         if path == "/api/chapters":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             p = (q.get("path") or [""])[0]
@@ -867,6 +950,13 @@ class Handler(BaseHTTPRequestHandler):
                 "books": len(merged.get("books", [])),
                 "bookmarks": len(merged.get("bookmarks", [])),
             })
+        if path == "/api/books":
+            try:
+                payload = json.loads(self._body().decode("utf-8-sig") or "{}")
+                total = add_book(udir, payload)
+                return self._json({"ok": True, "books": total})
+            except Exception as e:
+                return self._json({"error": str(e)}, 400)
         if path == "/api/chapters":
             try:
                 payload = json.loads(self._body().decode("utf-8-sig"))

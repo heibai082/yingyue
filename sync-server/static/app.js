@@ -35,6 +35,12 @@ async function load() {
     const d = await api('/api/summary');
     state.data = d;
     state.user = d.user || '';
+    try {
+      const idx = await api('/api/chapters/index');
+      state.index = idx.items || {};
+    } catch (_) {
+      state.index = state.index || {};
+    }
     const who = $('#whoami');
     if (who) who.textContent = state.user ? `已登录：${state.user}` : '已连接';
     setStatus(true);
@@ -291,6 +297,11 @@ async function ensureBooks() {
   return state.books;
 }
 
+function cacheBadge(path) {
+  const n = (state.index && state.index[path] || []).length;
+  return n > 0 ? ` · 已缓存 ${n} 章` : '';
+}
+
 function renderShelf(books) {
   const box = $('#shelf-list');
   if (!box) return;
@@ -302,7 +313,7 @@ function renderShelf(books) {
   box.innerHTML = list.map((b, i) => `<div class="row" data-book="${i}">
       <div class="grow">
         <div class="name">${esc(b.title || b.path)}</div>
-        <div class="sub">${esc(b.author || '')} · 第 ${Number(b.chapterIndex || 0) + 1} 章${b.total ? ' / ' + b.total : ''}</div>
+        <div class="sub">${esc(b.author || '')} · 第 ${Number(b.chapterIndex || 0) + 1} 章${b.total ? ' / ' + b.total : ''}${cacheBadge(b.path)}</div>
       </div>
       <span class="badge">打开</span>
     </div>`).join('');
@@ -314,20 +325,42 @@ function renderShelf(books) {
 async function openBook(book) {
   reader.online = null;
   reader.book = book;
+  reader.meta = null;
   reader.index = Number(book.chapterIndex || 0);
   $('#reader').classList.remove('hidden');
   $('#reader-title').textContent = book.title || book.path;
   $('#reader-sub').textContent = '正在加载目录…';
   $('#reader-body').innerHTML = '';
+
+  let cached = [];
   try {
     const r = await api(`/api/chapters/list?path=${encodeURIComponent(book.path)}`);
-    reader.chapters = r.items || [];
+    cached = r.items || [];
+  } catch (_) {}
+  try {
+    reader.meta = await api(`/api/books/meta?path=${encodeURIComponent(book.path)}`);
   } catch (_) {
-    reader.chapters = [];
+    reader.meta = null;
+  }
+  const cachedSet = new Set(cached.map((c) => Number(c.index)));
+  if (reader.meta && Array.isArray(reader.meta.chapters) && reader.meta.chapters.length) {
+    reader.chapters = reader.meta.chapters.map((c, i) => ({
+      index: i,
+      title: c.title,
+      url: c.url,
+      cached: cachedSet.has(i),
+    }));
+  } else {
+    reader.chapters = cached.map((c) => ({
+      index: Number(c.index),
+      title: c.title,
+      cached: true,
+    }));
   }
   if (!reader.chapters.length) {
     $('#reader-sub').textContent = '';
-    $('#reader-body').innerHTML = '<div class="reader-note">这本书还没有同步到正文。<br>在 App 里打开一章（并开启「同步缓存」）后，这里就能直接读。</div>';
+    $('#reader-body').innerHTML =
+      '<div class="reader-note">这本书还没有同步到正文。<br>在 App 里打开一章（并开启「同步缓存」）后，这里就能直接读。</div>';
     return;
   }
   showChapterList();
@@ -335,12 +368,17 @@ async function openBook(book) {
 
 function showChapterList() {
   const b = reader.book;
-  $('#reader-sub').textContent = `已同步 ${reader.chapters.length} 章`;
-  $('#reader-body').innerHTML = `<div class="chapter-list">${reader.chapters.map((c) => `
-    <div class="chapter-item" data-idx="${c.index}">
+  const cachedCount = reader.chapters.filter((c) => c.cached).length;
+  $('#reader-sub').textContent =
+    `已缓存 ${cachedCount} 章 / 目录 ${reader.chapters.length} 章`;
+  $('#reader-body').innerHTML = `<div class="chapter-list">${reader.chapters
+    .map(
+      (c) => `<div class="chapter-item" data-idx="${c.index}">
       ${esc(c.title || ('第 ' + (c.index + 1) + ' 章'))}
-      <span class="muted">${c.hasText ? '正文' : ''}${c.images ? c.images + ' 图' : ''}</span>
-    </div>`).join('')}</div>`;
+      <span class="muted">${c.cached ? '已缓存' : '在线'}</span>
+    </div>`,
+    )
+    .join('')}</div>`;
   $('#reader-body').querySelectorAll('[data-idx]').forEach((el) => {
     el.onclick = () => {
       const idx = Number(el.dataset.idx);
@@ -350,7 +388,6 @@ function showChapterList() {
   });
   if (b) $('#reader-sub').textContent += ` · 当前第 ${Number(b.chapterIndex || 0) + 1} 章`;
 }
-
 
 function renderImages(urls) {
   const box = $('#reader-body');
@@ -371,6 +408,8 @@ async function loadChapter(index) {
   const b = reader.book;
   if (!b) return;
   if (reader.online) return loadOnlineChapter(reader.online, index);
+  const entry = (reader.chapters || []).find((c) => Number(c.index) === Number(index));
+  if (entry && entry.cached === false) return loadMetaChapter(entry);
   reader.index = index;
   $('#reader-sub').textContent = '加载中…';
   try {
@@ -415,6 +454,46 @@ function toast(text) {
   setTimeout(() => el.remove(), 2000);
 }
 
+async function loadMetaChapter(entry) {
+  const meta = reader.meta;
+  if (!meta || !meta.sourceUrl) {
+    toast('这一章还没缓存，也缺少在线目录信息');
+    return;
+  }
+  reader.index = entry.index;
+  $('#reader-title').textContent = entry.title || '';
+  $('#reader-sub').textContent = '在线加载中…';
+  $('#reader-body').innerHTML = '<div class="reader-note">加载中…</div>';
+  try {
+    const data = await api(
+      `/api/read?source=${encodeURIComponent(meta.sourceUrl)}&url=${encodeURIComponent(entry.url)}`,
+    );
+    if (data.images && data.images.length) {
+      renderImages(data.images);
+    } else if (data.text) {
+      $('#reader-body').innerHTML = `<div class="reader-text">${esc(data.text)}</div>`;
+      $('#reader-body').scrollTop = 0;
+    } else {
+      $('#reader-body').innerHTML = '<div class="reader-note">这一章没取到内容（源可能是 JS 加密的，看 App 里可以读）</div>';
+    }
+    $('#reader-sub').textContent = (reader.book.title || '') + ' · 第 ' + (entry.index + 1) + ' 章 · 在线';
+    api('/api/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        books: [{
+          path: reader.book.path,
+          title: reader.book.title,
+          chapterIndex: entry.index,
+          lastReadAt: Date.now(),
+        }],
+      }),
+    }).catch(() => {});
+  } catch (e) {
+    $('#reader-body').innerHTML = `<div class="reader-note">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
 function stepChapter(delta) {
   const list = reader.chapters || [];
   if (!list.length) {
@@ -456,6 +535,32 @@ $('#reader-back').onclick = () => {
   $('#reader').classList.add('hidden');
   showChapterListSafe();
 };
+$('#reader-shelf')?.addEventListener('click', async () => {
+  const b = reader.book;
+  if (!b) return;
+  const meta = reader.meta;
+  const chapters = (reader.chapters || [])
+    .map((c) => ({ title: c.title, url: c.url || '' }))
+    .filter((c) => c.url);
+  try {
+    await api('/api/books', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: b.path,
+        title: b.title || '',
+        author: b.author || '',
+        sourceUrl: (meta && meta.sourceUrl) || (reader.online && reader.online.item.sourceUrl) || '',
+        chapters,
+      }),
+    });
+    toast('已加入书架');
+    state.books = null;
+    load();
+  } catch (e) {
+    toast('加入失败：' + e.message);
+  }
+});
 $('#reader-prev').onclick = () => stepChapter(-1);
 $('#reader-next').onclick = () => stepChapter(1);
 
