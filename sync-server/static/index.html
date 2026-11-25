@@ -25,6 +25,7 @@
             <div class="side-title">同步</div>
             <button class="nav active" data-view="overview"><span>📚</span>概览</button>
             <button class="nav" data-view="shelf"><span>📖</span>书架</button>
+            <button class="nav" data-view="search"><span>🔍</span>在线搜书</button>
             <button class="nav" data-view="bookmarks"><span>🔖</span>书签</button>
             <button class="nav" data-view="stats"><span>📊</span>统计</button>
             <button class="nav" data-view="recent"><span>🕒</span>最近阅读</button>
@@ -63,6 +64,17 @@
             <div class="card">
               <div class="card-head"><h3>最近阅读</h3><span class="muted">按最后阅读时间</span></div>
               <div id="recent-list" class="list"></div>
+            </div>
+          </section>
+
+          <section id="view-search" class="view">
+            <div class="card">
+              <div class="card-head"><h3>在线搜书</h3><span class="muted">用已同步的书源</span></div>
+              <div class="search-row">
+                <input id="search-input" class="search" placeholder="输入书名 / 作者，回车搜索" />
+                <button id="search-btn" class="btn">搜索</button>
+              </div>
+              <div id="search-list" class="list"></div>
             </div>
           </section>
 

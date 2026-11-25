@@ -168,7 +168,7 @@ load();
 state.timer = setInterval(load, 5000);
 
 /* ---------- 书架 / 阅读 ---------- */
-const reader = { book: null, chapters: [], index: 0 };
+const reader = { book: null, chapters: [], index: 0, online: null };
 
 async function ensureBooks() {
   if (state.books) return state.books;
@@ -198,6 +198,7 @@ function renderShelf(books) {
 }
 
 async function openBook(book) {
+  reader.online = null;
   reader.book = book;
   reader.index = Number(book.chapterIndex || 0);
   $('#reader').classList.remove('hidden');
@@ -235,6 +236,7 @@ function showChapterList() {
 async function loadChapter(index) {
   const b = reader.book;
   if (!b) return;
+  if (reader.online) return loadOnlineChapter(reader.online, index);
   reader.index = index;
   $('#reader-sub').textContent = '加载中…';
   try {
@@ -391,3 +393,91 @@ function renderSources() {
 }
 
 $('#src-search')?.addEventListener('input', renderSources);
+/* ---------- 在线搜书 / 在线阅读 ---------- */
+async function runSearch() {
+  const key = ($('#search-input')?.value || '').trim();
+  if (!key) return;
+  const box = $('#search-list');
+  box.innerHTML = '<div class="empty">正在搜索各个书源…（最多等 15 秒）</div>';
+  try {
+    const data = await api(`/api/search?key=${encodeURIComponent(key)}`);
+    renderSearchResults(data.items || []);
+  } catch (e) {
+    box.innerHTML = `<div class="empty">搜索失败：${esc(e.message)}</div>`;
+  }
+}
+
+function renderSearchResults(items) {
+  const box = $('#search-list');
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">没搜到。可能书源需要 App 的 WebView（JS 源），或关键字太偏。</div>';
+    return;
+  }
+  box.innerHTML = items.map((it, i) => `<div class="row" data-res="${i}">
+      <div class="grow">
+        <div class="name">${esc(it.name)} <span class="badge">${esc(it.sourceName)}</span></div>
+        <div class="sub">${esc(it.author || '')}${it.lastChapter ? ' · ' + esc(it.lastChapter) : ''}</div>
+        ${it.intro ? `<div class="sub" style="margin-top:2px">${esc(String(it.intro).slice(0, 90))}</div>` : ''}
+      </div>
+      <span class="badge done">打开</span>
+    </div>`).join('');
+  box.querySelectorAll('[data-res]').forEach((el) => {
+    el.onclick = () => openOnlineBook(items[Number(el.dataset.res)]);
+  });
+}
+
+async function openOnlineBook(item) {
+  $('#reader').classList.remove('hidden');
+  $('#reader-title').textContent = item.name || '—';
+  $('#reader-sub').textContent = '正在取目录…';
+  $('#reader-body').innerHTML = '<div class="reader-note">加载中…</div>';
+  try {
+    const data = await api(`/api/book?source=${encodeURIComponent(item.sourceUrl)}&url=${encodeURIComponent(item.bookUrl)}`);
+    const chapters = data.chapters || [];
+    if (!chapters.length) {
+      $('#reader-sub').textContent = '';
+      $('#reader-body').innerHTML = '<div class="reader-note">这个源没解析出目录（可能需要 App 的 WebView 或规则较特殊）</div>';
+      return;
+    }
+    reader.online = { item, chapters };
+    reader.book = { title: item.name, path: item.bookUrl };
+    reader.chapters = chapters.map((c, i) => ({ index: i, title: c.title }));
+    $('#reader-sub').textContent = `目录 ${chapters.length} 章`;
+    $('#reader-body').innerHTML = `<div class="chapter-list">${chapters.map((c, i) => `
+      <div class="chapter-item" data-oi="${i}">${esc(c.title)}</div>`).join('')}</div>`;
+    $('#reader-body').querySelectorAll('[data-oi]').forEach((el) => {
+      const i = Number(el.dataset.oi);
+      el.onclick = () => loadOnlineChapter(reader.online, i);
+    });
+  } catch (e) {
+    $('#reader-body').innerHTML = `<div class="reader-note">取目录失败：${esc(e.message)}</div>`;
+  }
+}
+
+async function loadOnlineChapter(online, index) {
+  const ch = online.chapters[index];
+  if (!ch) return;
+  reader.index = index;
+  $('#reader-title').textContent = ch.title || '';
+  $('#reader-sub').textContent = online.item.name || '';
+  $('#reader-body').innerHTML = '<div class="reader-note">正在取正文…</div>';
+  try {
+    const data = await api(`/api/read?source=${encodeURIComponent(online.item.sourceUrl)}&url=${encodeURIComponent(ch.url)}`);
+    if (data.images && data.images.length) {
+      $('#reader-body').innerHTML = data.images.map((u) => `<img src="${esc(u)}" loading="lazy" />`).join('');
+    } else if (data.text) {
+      $('#reader-body').innerHTML = `<div class="reader-text">${esc(data.text)}</div>`;
+    } else {
+      $('#reader-body').innerHTML = '<div class="reader-note">这一章没取到正文（可能需要 App 的 WebView）</div>';
+    }
+    $('#reader-body').scrollTop = 0;
+    reader.chaptersOffset = index;
+  } catch (e) {
+    $('#reader-body').innerHTML = `<div class="reader-note">取正文失败：${esc(e.message)}</div>`;
+  }
+}
+
+$('#search-btn')?.addEventListener('click', runSearch);
+$('#search-input')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') runSearch();
+});

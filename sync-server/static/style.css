@@ -221,3 +221,6 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.28); backdrop-filter: blur(4px); 
   border-radius: 10px; border: 1px solid var(--line);
   background: var(--card); color: var(--text); font-size: 13px;
 }
+.search-row { display: flex; gap: 8px; align-items: center; }
+.search-row .search { margin: 4px 0; }
+.search-row .btn { white-space: nowrap; }

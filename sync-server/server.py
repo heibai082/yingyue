@@ -27,8 +27,12 @@ import re
 import threading
 import time
 import urllib.parse
+import urllib.request
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import source_engine
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(ROOT, "data"))
@@ -149,6 +153,60 @@ def merge_state(cur, incoming):
     cur["updatedAt"] = now
     return cur
 
+
+def load_sources(udir):
+    f = os.path.join(udir, "sources.json")
+    if not os.path.isfile(f):
+        return []
+    try:
+        with open(f, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return []
+    if isinstance(data, dict):
+        data = data.get("items") or []
+    return [s for s in data if isinstance(s, dict)]
+
+
+def find_source(udir, source_url):
+    for s in load_sources(udir):
+        if (s.get("bookSourceUrl") or "").rstrip("/") == (source_url or "").rstrip("/"):
+            return s
+    return None
+
+
+def search_online(udir, key, limit=30):
+    sources = [
+        s for s in load_sources(udir)
+        if s.get("enabled", True) and (s.get("searchUrl") or "").strip()
+    ][:60]
+    results = []
+    lock = threading.Lock()
+
+    def one(src):
+        try:
+            items = source_engine.search_source(src, key)
+        except Exception as e:
+            print("[search] %s 失败：%s" % (src.get("bookSourceName"), e))
+            return
+        with lock:
+            for it in items[:10]:
+                it["sourceName"] = src.get("bookSourceName") or ""
+                it["sourceUrl"] = src.get("bookSourceUrl") or ""
+                results.append(it)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(one, sources))
+    # 按书名+作者去重
+    seen = set()
+    out = []
+    for r in results:
+        k = (r.get("name") or "", r.get("author") or "")
+        if not k[0] or k in seen:
+            continue
+        seen.add(k)
+        out.append(r)
+    return out[:limit]
 
 def chapters_dir(udir):
     d = os.path.join(udir, "chapters")
@@ -271,7 +329,7 @@ def safe_name(name):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "YingYueSync/1.1"
+    server_version = "YingYueSync/1.3"
     protocol_version = "HTTP/1.1"
 
     # ---------- 基础 ----------
@@ -345,11 +403,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/app.js":
             return self._static("app.js", "application/javascript; charset=utf-8")
         if path == "/api/health":
-            return self._json({"ok": True, "uptime": int(time.time() - STARTED_AT), "version": "1.1"})
+            return self._json({"ok": True, "uptime": int(time.time() - STARTED_AT), "version": "1.3"})
         if path == "/api/config":
             return self._json({
                 "name": "嘤阅同步",
-                "version": "1.1",
+                "version": "1.3",
                 "publicUrl": PUBLIC_URL or None,
                 "users": len(set(TOKENS.values())),
                 "features": ["state", "backups", "webdav", "multi-user"],
@@ -377,6 +435,62 @@ class Handler(BaseHTTPRequestHandler):
                 "backups": list_backups(udir),
                 "stats": st.get("stats", {}),
             })
+        if path == "/api/search":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            key = (q.get("key") or [""])[0].strip()
+            if not key:
+                return self._json({"items": [], "error": "缺少关键字"}, 400)
+            items = search_online(udir, key)
+            return self._json({"items": items, "count": len(items)})
+        if path == "/api/book":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            src_url = (q.get("source") or [""])[0]
+            book_url = (q.get("url") or [""])[0]
+            src = find_source(udir, src_url)
+            if src is None:
+                return self._json({"error": "找不到这个书源（先让 App 同步书源）"}, 404)
+            try:
+                data = source_engine.fetch_toc(src, book_url)
+            except Exception as e:
+                return self._json({"error": "取目录失败：%s" % e}, 502)
+            return self._json(data)
+        if path == "/api/read":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            src_url = (q.get("source") or [""])[0]
+            url = (q.get("url") or [""])[0]
+            src = find_source(udir, src_url)
+            if src is None:
+                return self._json({"error": "找不到这个书源"}, 404)
+            try:
+                data = source_engine.fetch_content(src, url)
+            except Exception as e:
+                return self._json({"error": "取正文失败：%s" % e}, 502)
+            token = urllib.parse.quote(self._token())
+            data["images"] = [
+                "/api/img?u=%s&r=%s&token=%s"
+                % (urllib.parse.quote(u, safe=""), urllib.parse.quote(url, safe=""), token)
+                for u in data.get("images") or []
+            ]
+            return self._json(data)
+        if path == "/api/img":
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            u = (q.get("u") or [""])[0]
+            ref = (q.get("r") or [""])[0]
+            if not u.startswith("http"):
+                return self._send(400, b"")
+            try:
+                req = urllib.request.Request(u, headers={
+                    "Referer": ref or u,
+                    "User-Agent": source_engine.UA,
+                })
+                with urllib.request.urlopen(req, timeout=25) as r:
+                    data = r.read(15 * 1024 * 1024 + 1)
+                    ctype = r.headers.get("Content-Type") or "image/jpeg"
+                if len(data) > 15 * 1024 * 1024:
+                    return self._send(413, b"")
+                return self._send(200, data, ctype.split(";")[0])
+            except Exception:
+                return self._send(502, b"")
         if path == "/api/chapters/list":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             p = (q.get("path") or [""])[0]

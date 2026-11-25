@@ -79,6 +79,30 @@ environment:
 
 每个令牌对应独立数据目录 `data/users/<名字>/`（状态、备份、WebDAV、章节都隔离）。
 
+## 在线搜书 / 在线阅读（不依赖 App）
+
+网页面板 →「在线搜书」→ 输入书名 → 点结果直接看目录、读正文或漫画。
+服务端用**迷你书源引擎**在 Docker 里跑书源规则，不需要 App 打开。
+
+支持的规则（覆盖内置书源和大多数 CSS/JSON 源）：
+
+- 选择器：`tag`、`.class`、`#id`、`tag.class`、`tag.1`（第 N 个）、后代 `div.x ul li`
+- 属性：`@text`、`@html`、`@href`、`@src`、`@title`、`@content`，支持嵌套 `dl.1@tag.dd`
+- 兜底：`a || b`；正则：`##pattern##replacement`
+- JSON 源：`$`、`$.a.b`、`$[*]`、`$.query.pages.*`
+- 请求：searchUrl 的 `,{"method":"POST","body":"q={{key}}","headers":{...}}`，`{{page}}` 也支持；每源独立 Cookie，搜索→目录→正文共享
+
+接口：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/search?key=` | 并发搜所有启用书源，按书名+作者去重 |
+| GET | `/api/book?source=&url=` | 取目录 |
+| GET | `/api/read?source=&url=` | 取正文（小说文本 / 漫画图片地址）|
+| GET | `/api/img?u=&r=&token=` | 图片代理（带 Referer，绕过防盗链/CORS）|
+
+**限制**：`@js:`、`@xpath:`、需要登录/加密的源跑不了（会明确返回空/提示），这些源仍要在 App 里用。
+
 ## 网页端直接看书 / 看漫画
 
 - App 设置里打开「同步正文 / 图片」后，读过的章节会把正文（或漫画图片地址）传到服务器；
@@ -89,5 +113,4 @@ environment:
 接口：`POST /api/chapters`（`{path,index,title,text|images,referer}`）、
 `GET /api/chapters/list?path=`、`GET /api/chapters?path=&index=`。
 
-> 说明：网页端目前读的是「已经同步过的章节」。在线搜书 / 换源仍需要在 App 里做
-> （网页没有 WebView 书源引擎）。
+> 说明：网页端既能读已同步的章节，也能用上面的「在线搜书」直接读（CSS/JSON 类源）。
