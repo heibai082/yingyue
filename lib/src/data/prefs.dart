@@ -108,6 +108,12 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   double comicBrightness = 1.0;
   double comicWarmth = 0.0;
 
+  /// 每天首次启动自动把备份传到 WebDAV（默认关闭）。
+  bool autoBackupEnabled = false;
+
+  /// 上次自动备份的日期（yyyy-MM-dd，空 = 从没跑过）。
+  String lastAutoBackupDay = '';
+
   /// 每日阅读目标（分钟；0 = 不设目标）。
   int dailyGoalMinutes = 0;
 
@@ -424,6 +430,8 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           autoTrackCache = data['autoTrackCache'] as bool? ?? true;
           cacheLimitMB = (data['cacheLimitMB'] as num?)?.toInt() ?? 2048;
           dailyGoalMinutes = (data['dailyGoalMinutes'] as num?)?.toInt() ?? 0;
+          autoBackupEnabled = data['autoBackupEnabled'] as bool? ?? false;
+          lastAutoBackupDay = data['lastAutoBackupDay'] as String? ?? '';
           comicPageMode = data['comicPageMode'] as String? ?? 'scroll';
           comicRightToLeft = data['comicRightToLeft'] as bool? ?? false;
           comicBrightness =
@@ -653,6 +661,20 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
 
   void setComicWarmth(double v) {
     comicWarmth = v.clamp(-1.0, 1.0);
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setAutoBackupEnabled(bool v) {
+    if (autoBackupEnabled == v) return;
+    autoBackupEnabled = v;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setLastAutoBackupDay(String day) {
+    if (lastAutoBackupDay == day) return;
+    lastAutoBackupDay = day;
     _saveSoon();
     notifyListeners();
   }
@@ -1105,6 +1127,8 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
         'autoTrackCache': autoTrackCache,
         'cacheLimitMB': cacheLimitMB,
         'dailyGoalMinutes': dailyGoalMinutes,
+        'autoBackupEnabled': autoBackupEnabled,
+        'lastAutoBackupDay': lastAutoBackupDay,
         'comicPageMode': comicPageMode,
         'comicRightToLeft': comicRightToLeft,
         'comicBrightness': comicBrightness,

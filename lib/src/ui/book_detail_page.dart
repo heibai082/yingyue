@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../data/book_store.dart';
+import '../data/chapter_health.dart';
 import '../data/cache_plan.dart';
 import '../data/cache_tracker.dart';
 import '../data/models.dart';
@@ -56,6 +57,10 @@ class _BookDetailPageState extends State<BookDetailPage> {
 
   /// 已缓存章节数（进度展示用）。
   int? _cachedCount;
+
+  /// 目录体检缓存（按章数失效）。
+  ChapterHealth? _healthCache;
+  int _healthFor = -1;
 
   BookStore get store => widget.store;
 
@@ -295,6 +300,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
                     ),
                   ),
                 ),
+              if (isOnline) _buildHealthSliver(book),
               if (book.intro.isNotEmpty)
                 SliverToBoxAdapter(
                   child: Padding(
@@ -341,6 +347,79 @@ class _BookDetailPageState extends State<BookDetailPage> {
           ),
         );
       },
+    );
+  }
+
+  /// 目录体检卡片：只在发现问题时出现（缺章 / 重复）。
+  Widget _buildHealthSliver(Book book) {
+    if (_healthFor != book.chapterCount) {
+      _healthCache = analyzeChapters(book.chapters);
+      _healthFor = book.chapterCount;
+    }
+    final health = _healthCache!;
+    if (health.ok) return const SliverToBoxAdapter(child: SizedBox.shrink());
+    final scheme = Theme.of(context).colorScheme;
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+        child: SoftCard(
+          radius: 16,
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.report_problem_outlined,
+                    size: 18,
+                    color: scheme.error,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '目录体检',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: scheme.error,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    health.summary,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              for (final issue in health.issues.take(3))
+                Text(
+                  '· ${issue.message}',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              if (health.issues.length > 3)
+                Text(
+                  '…还有 ${health.issues.length - 3} 条',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              const SizedBox(height: 2),
+              Text(
+                '可以到「换源」找一条更完整的目录，或继续读（不影响已缓存章节）',
+                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

@@ -1,4 +1,5 @@
 ﻿import 'dart:async';
+import 'dart:io';
 
 import '../source/subscription_link.dart';
 import '../source/http_client.dart';
@@ -10,6 +11,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../data/book_store.dart';
+import '../data/auto_backup.dart';
+import '../data/crash_log.dart';
 import '../data/download_center.dart';
 import '../data/cache_tracker.dart';
 import '../data/app_activity.dart' show kReaderActive;
@@ -70,6 +73,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     // 全局下载队列拿到书架（详情页 / 批量缓存都往这里排队）
     DownloadCenter.instance.bind(widget.store);
+    // 崩溃日志落盘（设置里可导出）
+    CrashLog.install(File('${widget.store.appDirs.files}/logs/crash.log'));
     // 队列进度同步到通知栏（Android；失败静默，不影响下载）
     DownloadCenter.instance.onProgress = (task, fraction) {
       if (task == null) {
@@ -95,6 +100,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _scheduleAutoUpdateCheck();
     _scheduleDailySourceSync();
     _scheduleCacheTrack();
+    _scheduleAutoBackup();
     _check();
   }
 
@@ -137,6 +143,26 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   // ==================== 每天首次：书源同步 + 体检 ====================
 
+  // ==================== WebDAV 自动备份 ====================
+
+  Timer? _autoBackupTimer;
+
+  /// 每天首次启动：延迟 20 秒自动备份一次（避开开屏和追更抢网络）。
+  void _scheduleAutoBackup() {
+    if (Platform.environment['FLUTTER_TEST'] == 'true') return;
+    _autoBackupTimer?.cancel();
+    _autoBackupTimer = Timer(const Duration(seconds: 20), () async {
+      if (!mounted) return;
+      final service = AutoBackupService(prefs: widget.prefs);
+      final result = await service.runIfDue();
+      if (result == null || !mounted) return;
+      final text = result.uploaded
+          ? '已自动备份到 WebDAV'
+                '${result.deleted > 0 ? '，清理了 ${result.deleted} 份旧备份' : ''}'
+          : '自动备份失败：${result.reason ?? '未知原因'}';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    });
+  }
   // ==================== 自动追更 / 补缓存 ====================
 
   /// 启动后（以及每次回到前台）给「开了自动追更」的书补新章。
@@ -150,6 +176,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void _scheduleCacheTrack() {
     if (Platform.environment['FLUTTER_TEST'] == 'true') return;
     _cacheTrackTimer?.cancel();
+    _autoBackupTimer?.cancel();
     _cacheTrackTimer = Timer(const Duration(seconds: 15), () {
       unawaited(_runCacheTrack());
     });
@@ -182,6 +209,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(text), duration: const Duration(seconds: 5)),
       );
+      // 有新章时再推一条通知栏提醒（在别的页面也能看到）
+      if (added > 0) {
+        final names = changed.map((r) => r.name).take(3).join('、');
+        unawaited(
+          NativeBridge.showNewChapters(
+            title: '有新章节啦（$added 章）',
+            text: changed.length == 1 ? names : '$names 等 ${changed.length} 本',
+          ),
+        );
+      }
     } catch (e) {
       debugPrint('[cache_track] 自动追更失败：$e');
     }
@@ -348,6 +385,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _check();
       // 从后台回来也补一轮（手机上「每天第一次打开」往往就是切回前台）
       _scheduleCacheTrack();
+      _scheduleAutoBackup();
     }
   }
 
@@ -358,6 +396,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _updateCheckTimer?.cancel();
     _sourceSyncTimer?.cancel();
     _cacheTrackTimer?.cancel();
+    _autoBackupTimer?.cancel();
     _cacheTracker.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();

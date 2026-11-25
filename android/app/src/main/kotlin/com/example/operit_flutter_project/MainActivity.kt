@@ -157,7 +157,28 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(ok)
                 }
-                // 下载进度通知（普通通知，不是前台服务）：缓存时能在通知栏看到进度
+                // 新章提醒（追更发现新章节时推一条）
+                "showNewChapters" -> {
+                    val args = call.arguments as? Map<*, *>
+                    val title = args?.get("title") as? String ?: "有新章节啦"
+                    val text = args?.get("text") as? String ?: ""
+                    try {
+                        ensureDownloadChannel()
+                        val builder = androidx.core.app.NotificationCompat.Builder(
+                            this,
+                            downloadChannelId,
+                        )
+                            .setSmallIcon(android.R.drawable.stat_notify_sync)
+                            .setContentTitle(title)
+                            .setContentText(text)
+                            .setAutoCancel(true)
+                        val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+                        nm.notify(42002, builder.build())
+                        result.success(true)
+                    } catch (_: Exception) {
+                        result.success(false)
+                    }
+                }                // 下载进度通知（普通通知，不是前台服务）：缓存时能在通知栏看到进度
                 "showDownloadProgress" -> {
                     val args = call.arguments as? Map<*, *>
                     val title = args?.get("title") as? String ?: "缓存中"

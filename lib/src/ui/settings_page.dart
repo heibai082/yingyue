@@ -7,6 +7,12 @@ import '../app_info.dart';
 import '../data/book_store.dart';
 import '../data/pet_guide.dart';
 import '../data/pet_store.dart';
+
+import 'dart:io';
+
+import '../data/bookmark_export.dart';
+import '../data/crash_log.dart';
+import '../data/export_dirs.dart';
 import '../data/prefs.dart';
 import 'cache_space_page.dart';
 import 'download_center_page.dart';
@@ -1325,6 +1331,87 @@ class _SettingsPageState extends State<SettingsPage> {
                 builder: (_) => BackupPage(prefs: widget.prefs),
               ),
             ),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: widget.prefs.autoBackupEnabled,
+            onChanged: widget.prefs.setAutoBackupEnabled,
+            secondary: const Icon(Icons.cloud_sync_rounded),
+            title: const Text('每天自动备份到 WebDAV', style: TextStyle(fontSize: 14)),
+            subtitle: Text(
+              widget.prefs.webdavUrl.trim().isEmpty
+                  ? '先在「备份与恢复」里填好 WebDAV 地址'
+                  : '每天首次启动备份一次，云端只留最近 7 份',
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.sticky_note_2_outlined),
+            title: const Text('导出书签 / 笔记', style: TextStyle(fontSize: 14)),
+            subtitle: const Text(
+              '存成 Markdown，按书分组',
+              style: TextStyle(fontSize: 12),
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              try {
+                await BookmarkStore.shared?.flush();
+                final items = BookmarkStore.shared?.items ?? const [];
+                final names = {
+                  for (final b in widget.store.books) b.id: b.title,
+                };
+                final path = await exportBookmarksMarkdown(
+                  items,
+                  bookNames: names,
+                  filesFallback: widget.store.appDirs.files,
+                );
+                messenger.showSnackBar(
+                  SnackBar(content: Text('已导出 ${items.length} 条书签\n$path')),
+                );
+              } catch (e) {
+                messenger.showSnackBar(SnackBar(content: Text('导出失败：$e')));
+              }
+            },
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.bug_report_outlined),
+            title: const Text('导出崩溃日志', style: TextStyle(fontSize: 14)),
+            subtitle: const Text(
+              '出错时把这份发给开发者，比自己描述快',
+              style: TextStyle(fontSize: 12),
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              final log = CrashLog(
+                file: File('${widget.store.appDirs.files}/logs/crash.log'),
+              );
+              final text = await log.tail();
+              if (text.trim().isEmpty) {
+                messenger.showSnackBar(
+                  const SnackBar(content: Text('还没有崩溃记录，一切正常 🎀')),
+                );
+                return;
+              }
+              try {
+                final dir = await resolveExportDir(
+                  filesFallback: widget.store.appDirs.files,
+                );
+                final file = File(
+                  '${dir.path}/崩溃日志-'
+                  '${DateTime.now().toIso8601String().substring(0, 10)}.txt',
+                );
+                await file.writeAsString(text);
+                messenger.showSnackBar(
+                  SnackBar(content: Text('已导出：${file.path}')),
+                );
+              } catch (e) {
+                messenger.showSnackBar(SnackBar(content: Text('导出失败：$e')));
+              }
+            },
           ),
           ListTile(
             contentPadding: EdgeInsets.zero,

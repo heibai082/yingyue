@@ -52,6 +52,15 @@ class NativeBridge {
     });
   }
 
+  /// 新章提醒（追更发现新章节时用）。
+  static Future<void> showNewChapters({
+    required String title,
+    required String text,
+  }) async {
+    if (!_supported) return;
+    await _invoke<bool>('showNewChapters', {'title': title, 'text': text});
+  }
+
   /// 关掉下载进度通知。
   static Future<void> hideDownloadProgress() async {
     if (!_supported) return;

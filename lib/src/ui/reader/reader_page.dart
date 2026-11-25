@@ -16,6 +16,7 @@ import '../../data/book_source.dart';
 import '../../data/book_store.dart';
 import '../../data/cache_plan.dart';
 import '../../data/cache_tracker.dart';
+import '../../data/chapter_patch.dart';
 import '../../data/models.dart';
 import '../../data/paginator.dart';
 import '../../data/offline_downloader.dart';
@@ -1239,6 +1240,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                 ),
               ],
             ),
+            if (_book?.format == BookFormat.online) ...[
+              const SizedBox(height: 10),
+              TextButton.icon(
+                onPressed: _patchFromOtherSource,
+                icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                label: const Text('用其它书源补这一章'),
+              ),
+            ],
           ],
         ),
       );
@@ -1838,6 +1847,34 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  /// 抓不到这一章时：去别的书源把同一章正文补进来（不换书、不动进度）。
+  Future<void> _patchFromOtherSource() async {
+    final book = _book;
+    final sources = SourceStore.shared;
+    if (book == null || sources == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('正在其它书源里找这一章…'),
+        duration: Duration(seconds: 30),
+      ),
+    );
+    final patcher = ChapterPatcher(store: widget.store, sources: sources);
+    final result = await patcher.patchChapter(book, _chapterIndex);
+    if (!mounted) return;
+    messenger.hideCurrentSnackBar();
+    if (result.ok) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('已用「${result.sourceName ?? '其它源'}」补好这一章')),
+      );
+      await _loadChapter(revealBars: true);
+    } else {
+      messenger.showSnackBar(
+        SnackBar(content: Text('没补到：${result.message ?? '换源也没找到'}')),
+      );
+    }
   }
 
   void _jumpToProgress(double value) {

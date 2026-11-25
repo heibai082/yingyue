@@ -1,4 +1,4 @@
-﻿// 把「已经缓存好的内容」导出成文件（换机 / 归档 / 丢 NAS 都方便）：
+// 把「已经缓存好的内容」导出成文件（换机 / 归档 / 丢 NAS 都方便）：
 //   - 小说：按阅读顺序拼成一个 .txt（含章节标题；没缓存的章写明「未缓存」）；
 //   - 漫画：把已缓存的话打成 .cbz（zip 里按话分目录、图片按清单顺序）。
 import 'dart:convert';
@@ -6,7 +6,7 @@ import 'dart:io';
 
 import 'package:archive/archive.dart';
 
-import '../platform/native_bridge.dart';
+import 'export_dirs.dart';
 import 'book_store.dart';
 import 'chapter_cache.dart';
 import 'models.dart';
@@ -38,32 +38,12 @@ class CacheExporter {
   final String? _filesFallback;
 
   /// 导出目录：外部存储 `Download/嘤阅导出`，拿不到就退回 App 私有目录。
-  Future<Directory> _targetDir() async {
-    final candidates = <String>[];
-    if (_dirOverride != null) candidates.add(_dirOverride);
-    try {
-      final root = await NativeBridge.storageRoot();
-      if (root.isNotEmpty) candidates.add('$root/Download/嘤阅导出');
-    } catch (_) {}
-    final fallback = _filesFallback;
-    if (fallback != null) candidates.add(fallback);
-    for (final path in candidates) {
-      try {
-        final dir = Directory(path);
-        await dir.create(recursive: true);
-        final probe = File('${dir.path}/.write_test');
-        await probe.writeAsString('ok');
-        await probe.delete();
-        return dir;
-      } catch (_) {}
-    }
-    throw StateError('找不到可写的导出目录');
-  }
+  Future<Directory> _targetDir() => resolveExportDir(
+    dirOverride: _dirOverride,
+    filesFallback: _filesFallback,
+  );
 
-  static String _safeName(String raw) {
-    final cleaned = raw.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
-    return cleaned.isEmpty ? 'book' : cleaned;
-  }
+  static String _safeName(String raw) => safeFileName(raw, fallback: 'book');
 
   /// 导出小说正文（TXT）。
   Future<ExportResult> exportNovel(Book book, BookStore store) async {
@@ -113,7 +93,7 @@ class CacheExporter {
     var skipped = 0;
     try {
       for (final index in _readingOrder(book)) {
-        final imgDir = ChapterCache.imageDirFor(_dirsFor(store), book, index);
+        final imgDir = ChapterCache.imageDirFor(store.appDirs, book, index);
         if (!imgDir.existsSync()) {
           skipped++;
           continue;
@@ -184,6 +164,4 @@ class CacheExporter {
         newestFirst ? book.chapters.length - 1 - i : i,
     ];
   }
-
-  AppDirs _dirsFor(BookStore store) => store.appDirs;
 }

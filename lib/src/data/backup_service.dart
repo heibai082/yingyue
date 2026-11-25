@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 
 import 'persistence.dart';
 
@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 
 import '../platform/native_bridge.dart';
+import 'library_merge.dart';
 import 'prefs.dart';
 
 /// 会被写进备份包的数据文件（都在 App 私有 files 目录下）。
@@ -189,9 +190,25 @@ class BackupService {
       }
       final target = File('${filesDir.path}/$name');
       try {
-        final data = Map<String, dynamic>.from(
+        var data = Map<String, dynamic>.from(
           jsonDecode(utf8.decode(entry.content as List<int>)) as Map,
         );
+        // 书架合并：两边都有的书按 lastReadAt 取新的，避免恢复把新进度冲掉
+        if (name == 'library.json') {
+          try {
+            if (await target.exists()) {
+              final currentJson = jsonDecode(await target.readAsString());
+              if (currentJson is Map) {
+                data = mergeLibraryJson(
+                  Map<String, dynamic>.from(currentJson),
+                  data,
+                );
+              }
+            }
+          } catch (_) {
+            // 本地文件坏了就按备份覆盖
+          }
+        }
         if (name == 'settings.json') {
           data
             ..remove('aiApiKey')

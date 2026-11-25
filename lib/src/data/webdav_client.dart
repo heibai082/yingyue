@@ -100,6 +100,14 @@ class WebdavClient {
     throw WebdavException(_explain(code, '上传'));
   }
 
+  /// DELETE 删除云端文件（清理旧备份用）。
+  Future<bool> delete(String remotePath) async {
+    final resp = await _send('DELETE', _uri(remotePath));
+    final code = resp.statusCode;
+    if (code == 200 || code == 204 || code == 404) return true;
+    return false;
+  }
+
   /// GET 下载。
   Future<List<int>> download(String remotePath) async {
     final resp = await _send('GET', _uri(remotePath));
