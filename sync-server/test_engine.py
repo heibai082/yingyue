@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """迷你书源引擎的单测（直接 python 运行，不依赖 pytest）。"""
 import unittest
 

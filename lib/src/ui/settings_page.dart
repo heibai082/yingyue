@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 
@@ -1423,8 +1423,12 @@ class _SettingsPageState extends State<SettingsPage> {
     final sync = _mkSync();
     try {
       final r = await sync.syncNow();
+      // 手动同步时顺便把缓存也推上去（不受「仅 Wi-Fi」限制）
+      final cached = await sync.autoPushPending(limit: 50, force: true);
       messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(SnackBar(content: Text(r.summary)));
+      messenger.showSnackBar(
+        SnackBar(content: Text(cached > 0 ? '，上传  章缓存' : r.summary)),
+      );
     } finally {
       sync.dispose();
     }

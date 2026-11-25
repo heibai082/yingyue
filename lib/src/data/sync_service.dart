@@ -315,9 +315,9 @@ class SyncService {
   /// 自动补齐：把「已缓存但没上传」的章节传上去，每次最多 [limit] 章。
   ///
   /// 只在开了自动上传、且（可选）在 Wi-Fi 下运行；失败不抛错，下次再试。
-  Future<int> autoPushPending({int limit = 20}) async {
+  Future<int> autoPushPending({int limit = 20, bool force = false}) async {
     if (!enabled || !prefs.syncCache || !prefs.autoUploadCache) return 0;
-    if (prefs.syncCacheWifiOnly) {
+    if (prefs.syncCacheWifiOnly && !force) {
       final wifi = await NativeBridge.isOnWifi();
       if (!wifi) return 0;
     }

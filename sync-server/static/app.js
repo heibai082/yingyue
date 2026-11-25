@@ -1,6 +1,6 @@
-﻿// 嘤阅同步面板（无依赖）
+// 嘤阅同步面板（无依赖）
 const $ = (s) => document.querySelector(s);
-const state = { token: localStorage.getItem('yy_token') || '', data: null, timer: null };
+const state = { data: null, timer: null, user: '' };
 
 function fmtSize(n) {
   if (!n) return '0 B';
@@ -20,17 +20,10 @@ function fmtSeconds(sec) {
   const h = sec / 3600;
   return h >= 1 ? h.toFixed(1) : (sec / 60).toFixed(0) + ' 分';
 }
-function authHeaders() {
-  return state.token ? { Authorization: `Bearer ${state.token}` } : {};
-}
-
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    ...opts,
-    headers: { ...(opts.headers || {}), ...authHeaders() },
-  });
+  const res = await fetch(path, { ...opts, credentials: 'same-origin' });
   if (res.status === 401) {
-    openTokenDialog();
+    openLoginDialog();
     throw new Error('unauthorized');
   }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -41,10 +34,13 @@ async function load() {
   try {
     const d = await api('/api/summary');
     state.data = d;
+    state.user = d.user || '';
+    const who = $('#whoami');
+    if (who) who.textContent = state.user ? `已登录：${state.user}` : '已连接';
     setStatus(true);
     render(d);
   } catch (e) {
-    setStatus(false, e.message === 'unauthorized' ? '需要令牌' : '连接失败');
+    setStatus(false, e.message === 'unauthorized' ? '请先登录' : '连接失败');
   }
 }
 
@@ -97,7 +93,7 @@ function renderBackups(items) {
         <div class="name">${esc(b.name)}</div>
         <div class="sub">${fmtSize(b.size)} · ${fmtTime(b.mtime * 1000)}</div>
       </div>
-      <a class="btn" href="/api/backups/${encodeURIComponent(b.name)}${state.token ? '?token=' + encodeURIComponent(state.token) : ''}">下载</a>
+      <a class="btn" href="/api/backups/${encodeURIComponent(b.name)}">下载</a>
       <button class="btn danger" data-del="${esc(b.name)}">删除</button>
     </div>`).join('');
   box.querySelectorAll('[data-del]').forEach((btn) => {
@@ -125,23 +121,140 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-function openTokenDialog() {
-  const dlg = $('#token-dialog');
-  $('#token-input').value = state.token;
-  dlg.showModal();
+function openLoginDialog() {
+  const dlg = $('#login-dialog');
+  if (!dlg.open) dlg.showModal();
+  $('#login-user').focus();
 }
 
-$('#token-dialog').addEventListener('close', () => {
-  const val = $('#token-input').value.trim();
-  if ($('#token-dialog').returnValue === 'ok') {
-    state.token = val;
-    localStorage.setItem('yy_token', val);
-    load();
+async function doLogin() {
+  const username = $('#login-user').value.trim();
+  const password = $('#login-pass').value;
+  const err = $('#login-error');
+  err.textContent = '';
+  try {
+    const res = await fetch('/api/ui/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) {
+      err.textContent = '账号或密码不对';
+      return;
+    }
+    $('#login-pass').value = '';
+    $('#login-dialog').close();
+    await load();
+  } catch (e) {
+    err.textContent = '连不上服务：' + e.message;
   }
+}
+
+$('#login-btn')?.addEventListener('click', doLogin);
+$('#login-cancel')?.addEventListener('click', () => $('#login-dialog').close());
+$('#login-pass')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') doLogin();
+});
+$('#logout-btn')?.addEventListener('click', async () => {
+  await fetch('/api/ui/logout', { method: 'POST', credentials: 'same-origin' });
+  location.reload();
 });
 
 $('#refresh').onclick = load;
-$('#token-btn').onclick = openTokenDialog;
+
+async function saveAccount() {
+  const username = $('#acc-user').value.trim();
+  const password = $('#acc-pass').value;
+  const msg = $('#acc-msg');
+  msg.textContent = '';
+  msg.className = 'muted';
+  if (username.length < 2 || password.length < 4) {
+    msg.textContent = '账号至少 2 位、密码至少 4 位';
+    msg.className = 'error';
+    return;
+  }
+  try {
+    const res = await fetch('/api/ui/account', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      msg.textContent = data.error || '保存失败';
+      msg.className = 'error';
+      return;
+    }
+    msg.textContent = '已保存，下次用新账号登录';
+    msg.className = 'muted';
+    $('#acc-pass').value = '';
+    $('#whoami').textContent = '已登录：' + username;
+  } catch (e) {
+    msg.textContent = '保存失败：' + e.message;
+    msg.className = 'error';
+  }
+}
+$('#acc-save')?.addEventListener('click', saveAccount);
+
+async function loadToken() {
+  const box = $('#token-value');
+  if (!box) return;
+  try {
+    const data = await api('/api/ui/token');
+    box.value = data.token || '';
+  } catch (_) {}
+}
+
+async function saveToken() {
+  const box = $('#token-value');
+  const msg = $('#token-msg');
+  msg.textContent = '';
+  const token = box.value.trim();
+  try {
+    const res = await fetch('/api/ui/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ token }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      msg.textContent = data.error || '保存失败';
+      msg.className = 'error';
+      return;
+    }
+    box.value = data.token;
+    msg.textContent = '已保存，去 App 里换成这个令牌';
+    msg.className = 'muted';
+  } catch (e) {
+    msg.textContent = '保存失败：' + e.message;
+    msg.className = 'error';
+  }
+}
+
+function randomToken() {
+  const chars = 'abcdefghijkmnpqrstuvwxyz23456789';
+  let out = 'yy-';
+  for (let i = 0; i < 12; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+$('#token-random')?.addEventListener('click', () => {
+  $('#token-value').value = randomToken();
+  $('#token-msg').textContent = '点「保存」生效';
+  $('#token-msg').className = 'muted';
+});
+$('#token-save')?.addEventListener('click', saveToken);
+$('#token-copy')?.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($('#token-value').value);
+    $('#token-msg').textContent = '已复制';
+    $('#token-msg').className = 'muted';
+  } catch (_) {}
+});
+
 
 document.querySelectorAll('.nav').forEach((btn) => {
   btn.onclick = async () => {
@@ -155,6 +268,7 @@ document.querySelectorAll('.nav').forEach((btn) => {
       } catch (_) {}
     }
     if (btn.dataset.view === 'sources') loadSources();
+    if (btn.dataset.view === 'token') loadToken();
     if (btn.dataset.view === 'bookmarks') {
       try {
         await ensureBooks();

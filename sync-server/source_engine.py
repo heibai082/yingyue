@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """迷你书源引擎（0.55）：让 Docker 网页端也能在线搜书 / 看目录 / 读正文。
 

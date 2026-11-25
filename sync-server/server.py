@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """嘤阅同步服务（单文件，只用标准库，方便 Docker 里跑）。
 
@@ -20,6 +20,7 @@
 """
 
 import base64
+import http.cookies
 import io
 import json
 import os
@@ -43,6 +44,122 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 # 版本号（workflow 会读取这个常量）
 SYNC_VERSION = "1.3"
 USERS_DIR = os.path.join(DATA_DIR, "users")
+
+# 网页面板：账号密码登录（浏览器记住 30 天），App 仍用 Bearer 令牌
+UI_USER = os.environ.get("UI_USER", "admin")
+UI_PASSWORD = os.environ.get("UI_PASSWORD", "admin")  # 默认 admin/admin，可在面板里改
+UI_SESSION_DAYS = int(os.environ.get("UI_SESSION_DAYS", "30"))
+SESSIONS_FILE = os.path.join(DATA_DIR, "sessions.json")
+UI_SESSIONS = {}  # sid -> {"user": name, "exp": ts}
+
+
+def load_sessions():
+    try:
+        with open(SESSIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        now = time.time()
+        return {k: v for k, v in data.items() if isinstance(v, dict) and v.get("exp", 0) > now}
+    except Exception:
+        return {}
+
+
+def save_sessions():
+    try:
+        tmp = SESSIONS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(UI_SESSIONS, f)
+        os.replace(tmp, SESSIONS_FILE)
+    except Exception:
+        pass
+
+
+AUTH_FILE = os.path.join(DATA_DIR, "ui_auth.json")
+
+
+def load_ui_auth():
+    """面板账号密码：优先用 ui_auth.json（面板里改过的），否则用环境变量/默认 admin。"""
+    try:
+        with open(AUTH_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        u = (data.get("username") or "").strip()
+        p = data.get("password") or ""
+        if u and p:
+            return u, p
+    except Exception:
+        pass
+    return UI_USER, UI_PASSWORD
+
+
+def save_ui_auth(username, password):
+    tmp = AUTH_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"username": username, "password": password}, f)
+    os.replace(tmp, AUTH_FILE)
+
+TOKENS_FILE = os.path.join(DATA_DIR, "tokens.json")
+
+
+def load_token_overrides():
+    try:
+        with open(TOKENS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items() if k and v}
+    except Exception:
+        pass
+    return {}
+
+
+def apply_token_overrides():
+    """面板里改过的令牌优先：有覆盖的用户，丢掉环境变量里的旧令牌。"""
+    overrides = load_token_overrides()
+    if not overrides:
+        return
+    users = set(overrides.values())
+    for tok in [t for t, u in list(TOKENS.items()) if u in users]:
+        TOKENS.pop(tok, None)
+    TOKENS.update(overrides)
+
+
+def save_token_overrides():
+    try:
+        tmp = TOKENS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(TOKENS, f)
+        os.replace(tmp, TOKENS_FILE)
+    except Exception:
+        pass
+
+
+def token_of_user(name):
+    for tok, u in TOKENS.items():
+        if u == name:
+            return tok
+    return ""
+
+def check_login(username, password):
+    """返回用户目录名；失败返回 None。
+
+    支持两种：
+      1. 用户名 = 令牌对应的名字（如 me / friend），密码 = 该令牌
+      2. 用户名 = UI_USER，密码 = UI_PASSWORD（管理员，进入第一个用户的数据）
+    """
+    username = (username or "").strip()
+    password = (password or "").strip()
+    if not password:
+        return None
+    panel_user, panel_pass = load_ui_auth()
+    if username == panel_user and password == panel_pass:
+        return next(iter(TOKENS.values()))
+    if username in set(TOKENS.values()) and TOKENS.get(password) == username:
+        return username
+    for tok, name in TOKENS.items():
+        if name == username and tok == password:
+            return name
+    first = 'me' if 'me' in TOKENS.values() else next(iter(TOKENS.values()))
+    if username == UI_USER and password == (UI_PASSWORD or next(iter(TOKENS.keys()))):
+        return first
+    return None
 
 LOCK = threading.Lock()
 STARTED_AT = time.time()
@@ -356,8 +473,8 @@ class Handler(BaseHTTPRequestHandler):
         if body:
             self.wfile.write(body)
 
-    def _json(self, obj, code=200):
-        self._send(code, obj)
+    def _json(self, obj, code=200, extra=None):
+        self._send(code, obj, extra=extra)
 
     def _token(self):
         auth = self.headers.get("Authorization", "")
@@ -375,8 +492,30 @@ class Handler(BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         return q.get("token", [""])[0].strip()
 
+    def _sid(self):
+        raw = self.headers.get("Cookie") or ""
+        try:
+            c = http.cookies.SimpleCookie(raw)
+            m = c.get("yy_sid")
+            return m.value if m else ""
+        except Exception:
+            return ""
+
+    def _session_user(self):
+        sid = self._sid()
+        if not sid:
+            return None
+        s = UI_SESSIONS.get(sid)
+        if not s or s.get("exp", 0) < time.time():
+            UI_SESSIONS.pop(sid, None)
+            return None
+        return s.get("user")
+
     def _user(self):
-        """命中的用户名；没命中的令牌返回 None。"""
+        """命中的用户名：优先面板会话 cookie，其次 App 的令牌。"""
+        u = self._session_user()
+        if u:
+            return u
         tok = self._token()
         if not TOKENS:
             return "default"
@@ -403,8 +542,36 @@ class Handler(BaseHTTPRequestHandler):
             return self._static("index.html", "text/html; charset=utf-8")
         if path == "/style.css":
             return self._static("style.css", "text/css; charset=utf-8")
+        if path == "/icon.png":
+            return self._static("icon.png", "image/png")
+        if path in ("/favicon.ico", "/apple-touch-icon.png"):
+            return self._static("icon.png", "image/png")
         if path == "/app.js":
             return self._static("app.js", "application/javascript; charset=utf-8")
+        if path == "/api/ui/account":
+            user0 = self._user()
+            if not user0:
+                return self._json({"error": "unauthorized"}, 401)
+            try:
+                body = json.loads(self._body().decode("utf-8-sig") or "{}")
+            except Exception:
+                return self._json({"error": "bad json"}, 400)
+            nu = (body.get("username") or "").strip()
+            np = (body.get("password") or "").strip()
+            if len(nu) < 2 or len(np) < 4:
+                return self._json({"error": "账号至少 2 位、密码至少 4 位"}, 400)
+            save_ui_auth(nu, np)
+            return self._json({"ok": True, "username": nu})
+        if path == "/api/ui/token":
+            u = self._user()
+            if not u:
+                return self._json({"error": "unauthorized"}, 401)
+            return self._json({"token": token_of_user(u), "user": u})
+        if path == "/api/ui/me":
+            u = self._user()
+            if not u:
+                return self._json({"error": "unauthorized"}, 401)
+            return self._json({"user": u})
         if path == "/api/health":
             return self._json({"ok": True, "uptime": int(time.time() - STARTED_AT), "version": SYNC_VERSION})
         if path == "/api/config":
@@ -575,6 +742,66 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        if path == "/api/ui/login":
+            try:
+                body = json.loads(self._body().decode("utf-8-sig") or "{}")
+            except Exception:
+                return self._json({"error": "bad json"}, 400)
+            name = check_login(body.get("username"), body.get("password"))
+            if not name:
+                return self._json({"error": "账号或密码不对"}, 401)
+            sid = base64.urlsafe_b64encode(os.urandom(24)).decode().rstrip("=")
+            exp = time.time() + UI_SESSION_DAYS * 86400
+            UI_SESSIONS[sid] = {"user": name, "exp": exp}
+            save_sessions()
+            cookie = (
+                "yy_sid=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax"
+                % (sid, UI_SESSION_DAYS * 86400)
+            )
+            return self._json({"ok": True, "user": name}, extra={"Set-Cookie": cookie})
+        if path == "/api/ui/logout":
+            sid = self._sid()
+            if sid:
+                UI_SESSIONS.pop(sid, None)
+                save_sessions()
+            return self._json({"ok": True}, extra={"Set-Cookie": "yy_sid=; Path=/; Max-Age=0"})
+        if path == "/api/ui/token":
+            user0 = self._user()
+            if not user0:
+                return self._json({"error": "unauthorized"}, 401)
+            try:
+                body = json.loads(self._body().decode("utf-8-sig") or "{}")
+            except Exception:
+                return self._json({"error": "bad json"}, 400)
+            new = (body.get("token") or "").strip()
+            if not new:
+                new = "yy-" + base64.urlsafe_b64encode(os.urandom(9)).decode().rstrip("=").lower()
+            if not re.match(r"^[A-Za-z0-9_\-]{6,64}$", new):
+                return self._json({"error": "令牌只能用字母数字-_，6~64 位"}, 400)
+            for tok in [t for t, u in list(TOKENS.items()) if u == user0]:
+                TOKENS.pop(tok, None)
+            TOKENS[new] = user0
+            save_token_overrides()
+            return self._json({"ok": True, "token": new, "user": user0})
+        if path == "/api/ui/account":
+            user0 = self._user()
+            if not user0:
+                return self._json({"error": "unauthorized"}, 401)
+            try:
+                body = json.loads(self._body().decode("utf-8-sig") or "{}")
+            except Exception:
+                return self._json({"error": "bad json"}, 400)
+            nu = (body.get("username") or "").strip()
+            np = (body.get("password") or "").strip()
+            if len(nu) < 2 or len(np) < 4:
+                return self._json({"error": "账号至少 2 位、密码至少 4 位"}, 400)
+            save_ui_auth(nu, np)
+            return self._json({"ok": True, "username": nu})
+        if path == "/api/ui/me":
+            u = self._user()
+            if not u:
+                return self._json({"error": "unauthorized"}, 401)
+            return self._json({"user": u})
         user = self._require_user()
         if user is None:
             return
@@ -842,6 +1069,8 @@ def migrate_legacy():
 
 def main():
     os.makedirs(USERS_DIR, exist_ok=True)
+    UI_SESSIONS.update(load_sessions())
+    apply_token_overrides()
     migrate_legacy()
     for name in set(TOKENS.values()):
         user_dir(name)
