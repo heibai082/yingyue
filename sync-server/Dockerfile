@@ -1,7 +1,7 @@
-FROM python:3.12-slim
+﻿FROM python:3.12-slim
 
 WORKDIR /app
-COPY server.py ./
+COPY server.py source_engine.py ./
 COPY static ./static
 
 ENV DATA_DIR=/data \
