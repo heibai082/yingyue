@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../data/book_store.dart';
+import '../data/download_center.dart';
 import '../data/cache_tracker.dart';
 import '../data/app_activity.dart' show kReaderActive;
 import '../data/pet_guide.dart';
@@ -67,6 +68,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 全局下载队列拿到书架（详情页 / 批量缓存都往这里排队）
+    DownloadCenter.instance.bind(widget.store);
+    // 队列进度同步到通知栏（Android；失败静默，不影响下载）
+    DownloadCenter.instance.onProgress = (task, fraction) {
+      if (task == null) {
+        unawaited(NativeBridge.hideDownloadProgress());
+      } else {
+        unawaited(
+          NativeBridge.showDownloadProgress(
+            title: '缓存《${task.name}》',
+            text: task.label,
+            fraction: fraction,
+          ),
+        );
+      }
+    };
     // 「重看新手引导」：切回书架页（引导从书架开始，后续锚点也在书架 / 导航栏）
     kPetGuideReplay.addListener(_onGuideReplay);
     kPetGuideStepId.addListener(_onGuideStepChanged);

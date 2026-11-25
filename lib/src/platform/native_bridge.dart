@@ -36,6 +36,28 @@ class NativeBridge {
     }
   }
 
+  /// 下载进度通知（普通通知，不是前台服务；失败静默）。
+  static Future<void> showDownloadProgress({
+    required String title,
+    required String text,
+    required double fraction,
+  }) async {
+    if (!_supported) return;
+    final max = 1000;
+    await _invoke<bool>('showDownloadProgress', {
+      'title': title,
+      'text': text,
+      'progress': (fraction.clamp(0.0, 1.0) * max).round(),
+      'max': max,
+    });
+  }
+
+  /// 关掉下载进度通知。
+  static Future<void> hideDownloadProgress() async {
+    if (!_supported) return;
+    await _invoke<bool>('hideDownloadProgress');
+  }
+
   /// 当前是否连着 Wi-Fi（「只在 Wi-Fi 下缓存 / 追更」用）。
   ///
   /// 拿不到（非 Android / 调用失败）时返回 true：宁可继续缓存，

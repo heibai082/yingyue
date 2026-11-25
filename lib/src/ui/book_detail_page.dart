@@ -9,6 +9,7 @@ import '../data/book_store.dart';
 import '../data/cache_plan.dart';
 import '../data/cache_tracker.dart';
 import '../data/models.dart';
+import '../data/download_center.dart';
 import '../data/offline_downloader.dart';
 import '../data/prefs.dart';
 import '../platform/native_bridge.dart';
@@ -41,8 +42,8 @@ class BookDetailPage extends StatefulWidget {
 }
 
 class _BookDetailPageState extends State<BookDetailPage> {
-  /// 离线下载器（一次一个任务）。
-  final OfflineDownloader _downloader = OfflineDownloader();
+  /// 全局下载队列（多本书排队，详情页只负责入队 + 看进度）。
+  DownloadCenter get _center => DownloadCenter.instance;
 
   /// 追更 / 检查新章（同一时刻只跑一轮）。
   late final CacheTracker _tracker = CacheTracker(store: widget.store);
@@ -63,11 +64,24 @@ class _BookDetailPageState extends State<BookDetailPage> {
   @override
   void initState() {
     super.initState();
+    _center.addListener(_syncFromCenter);
     _refreshCachedCount();
+  }
+
+  /// 队列里这本书的进度同步到卡片（换页/暂停都由中心驱动）。
+  void _syncFromCenter() {
+    if (!mounted) return;
+    DownloadTask? task;
+    for (final t in _center.tasks) {
+      if (t.bookId == widget.bookId && !t.finished) task = t;
+    }
+    final p = task?.progress;
+    if (p != _progress) setState(() => _progress = p);
   }
 
   @override
   void dispose() {
+    _center.removeListener(_syncFromCenter);
     _tracker.dispose();
     super.dispose();
   }
@@ -85,7 +99,6 @@ class _BookDetailPageState extends State<BookDetailPage> {
   Future<void> _downloadByPlan() async {
     final book = _book;
     if (book == null) return;
-    if (_downloader.running) return;
     final messenger = ScaffoldMessenger.of(context);
     // 只在 Wi-Fi 下缓存：移动网络时先问一句，别偷偷跑流量
     if (widget.prefs.wifiOnlyDownloads && !await NativeBridge.isOnWifi()) {
@@ -104,42 +117,17 @@ class _BookDetailPageState extends State<BookDetailPage> {
       return;
     }
 
-    setState(() {
-      _progress = OfflineDownloadProgress(
-        done: 0,
-        total: plan.indices.length,
-        failed: 0,
-        currentChapter: plan.indices.first,
-        finished: false,
-        cancelled: false,
-        cachedBefore: plan.cachedInRange,
-      );
-    });
-
-    final result = await _downloader.downloadChapters(
+    await _center.enqueue(
       book,
-      store,
       indices: plan.indices,
       cachedBefore: plan.cachedInRange,
-      onProgress: (p) {
-        if (mounted) setState(() => _progress = p);
-      },
+      plan: book.cachePlan,
     );
-
-    if (!mounted) return;
-    setState(() => _progress = null);
-    await _refreshCachedCount();
     if (!mounted) return;
     messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          result.cancelled
-              ? '已暂停（本次存了 ${result.done} 章，再点一次继续）'
-              : result.failed == 0
-              ? '缓存完成 ${result.done} 章，断网也能读啦 🎀'
-              : '缓存 ${result.done} 章，${result.failed} 章失败（可重试）',
-        ),
-        duration: const Duration(seconds: 3),
+      const SnackBar(
+        content: Text('已加入下载队列，可在「设置 → 下载中心」看进度'),
+        duration: Duration(seconds: 3),
       ),
     );
   }
@@ -147,7 +135,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
   /// 「检查更新」：抓站点目录看有没有新章，有就按范围补下来。
   Future<void> _checkUpdates() async {
     final book = _book;
-    if (book == null || _checking || _downloader.running) return;
+    if (book == null || _checking || _center.busy) return;
     if (book.cachePlan.isOff) {
       ScaffoldMessenger.of(
         context,
@@ -282,9 +270,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
                     onSwitchSource: isOnline
                         ? () => _switchSource(context, book)
                         : null,
-                    onDownload: isOnline && !_downloader.running
-                        ? _showCacheSettings
-                        : null,
+                    onDownload: isOnline ? _showCacheSettings : null,
                   ),
                 ),
               ),
@@ -303,7 +289,7 @@ class _BookDetailPageState extends State<BookDetailPage> {
                       onCheck: _checkUpdates,
                       onCancel: () {
                         _tracker.cancel();
-                        _downloader.cancel();
+                        _center.pauseCurrent();
                       },
                       onClear: _clearCache,
                     ),

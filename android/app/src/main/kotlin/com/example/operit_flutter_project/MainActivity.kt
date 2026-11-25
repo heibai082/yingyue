@@ -1,4 +1,4 @@
-package com.example.operit_flutter_project
+﻿package com.example.operit_flutter_project
 
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -157,7 +157,27 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(ok)
                 }
-                // 分享一段文本（书源 JSON 之类）：调系统分享面板，微/QQ/蓝牙都能收
+                // 下载进度通知（普通通知，不是前台服务）：缓存时能在通知栏看到进度
+                "showDownloadProgress" -> {
+                    val args = call.arguments as? Map<*, *>
+                    val title = args?.get("title") as? String ?: "缓存中"
+                    val text = args?.get("text") as? String ?: ""
+                    val progress = (args?.get("progress") as? Number)?.toInt() ?: 0
+                    val max = (args?.get("max") as? Number)?.toInt() ?: 100
+                    try {
+                        showDownloadNotification(title, text, progress, max)
+                        result.success(true)
+                    } catch (_: Exception) {
+                        result.success(false)
+                    }
+                }
+                "hideDownloadProgress" -> {
+                    try {
+                        cancelDownloadNotification()
+                    } catch (_: Exception) {
+                    }
+                    result.success(true)
+                }                // 分享一段文本（书源 JSON 之类）：调系统分享面板，微/QQ/蓝牙都能收
                 "shareText" -> {
                     val args = call.arguments as? Map<*, *>
                     val text = args?.get("text") as? String
@@ -850,5 +870,42 @@ class MainActivity : FlutterActivity() {
                 1001,
             )
         }
+    }
+
+    // ---------- 下载进度通知 ----------
+    private val downloadChannelId = "yingyue_download"
+    private val downloadNotificationId = 42001
+
+    private fun ensureDownloadChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+            if (nm.getNotificationChannel(downloadChannelId) == null) {
+                val ch = android.app.NotificationChannel(
+                    downloadChannelId,
+                    "缓存下载",
+                    android.app.NotificationManager.IMPORTANCE_LOW,
+                )
+                ch.setShowBadge(false)
+                nm.createNotificationChannel(ch)
+            }
+        }
+    }
+
+    private fun showDownloadNotification(title: String, text: String, progress: Int, max: Int) {
+        ensureDownloadChannel()
+        val builder = androidx.core.app.NotificationCompat.Builder(this, downloadChannelId)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setProgress(max.coerceAtLeast(1), progress.coerceIn(0, max), false)
+        val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        nm.notify(downloadNotificationId, builder.build())
+    }
+
+    private fun cancelDownloadNotification() {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        nm.cancel(downloadNotificationId)
     }
 }

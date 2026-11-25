@@ -1,4 +1,4 @@
-// 追更 + 自动补缓存：让「全部」/「从当前章到最新」这两种范围真的自动跟进。
+﻿// 追更 + 自动补缓存：让「全部」/「从当前章到最新」这两种范围真的自动跟进。
 //
 // 用户反馈：「从当前章节缓存到最新（并且开启自动追剧模式缓存）」——光有范围
 // 选择还不够，站点更新之后得自动把新章补下来，不然第二天还是要手动点。
@@ -21,6 +21,7 @@ import '../source/online_book_service.dart';
 import '../source/source_store.dart';
 import 'app_activity.dart';
 import 'book_store.dart';
+import 'download_center.dart';
 import 'cache_plan.dart';
 import 'models.dart';
 import 'offline_downloader.dart';
@@ -223,7 +224,7 @@ class CacheTracker {
         reason: '这本书关掉了自动缓存',
       );
     }
-    if (running) {
+    if (running || DownloadCenter.instance.busy) {
       return CacheTrackResult(
         bookId: bookId,
         name: book.title,

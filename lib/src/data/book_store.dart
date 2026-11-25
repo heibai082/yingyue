@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -44,6 +44,8 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
   Directory get coverDir =>
       Directory('${_dirs?.files ?? Directory.systemTemp.path}/covers');
 
+  /// 当前生效的 App 目录（导出 / 诊断用）。
+  AppDirs get appDirs => _dirsOrTemp;
   AppDirs get _dirsOrTemp =>
       _dirs ??
       AppDirs(
@@ -829,6 +831,55 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
       }
     } catch (_) {}
     return total;
+  }
+
+  /// 只保留当前进度附近的 [keep] 章，其余删缓存（省空间，随时可再下）。
+  ///
+  /// 阅读顺序上：往前（更旧）保留 [keepOlder] 章，往后（更新）保留 [keepNewer] 章。
+  /// 返回删掉的章数。
+  Future<int> trimBookCache(
+    String bookId, {
+    int keepOlder = 10,
+    int keepNewer = 40,
+  }) async {
+    final book = byId(bookId);
+    if (book == null || book.chapters.isEmpty) return 0;
+    final newestFirst = looksNewestFirst(book.chapters);
+    // 阅读顺序（从最新到最旧）的序号列表
+    final order = [
+      for (var i = 0; i < book.chapters.length; i++)
+        newestFirst ? i : book.chapters.length - 1 - i,
+    ];
+    final currentPos = order.indexOf(book.safeChapterIndex);
+    final keep = <int>{};
+    for (var k = -keepNewer; k <= keepOlder; k++) {
+      final pos = currentPos + k;
+      if (pos < 0 || pos >= order.length) continue;
+      keep.add(order[pos]);
+    }
+    var removed = 0;
+    for (var i = 0; i < book.chapters.length; i++) {
+      if (keep.contains(i)) continue;
+      try {
+        final f = ChapterCache.fileFor(_dirsOrTemp, book, i);
+        if (await f.exists()) {
+          await f.delete();
+          removed++;
+        }
+        final img = ChapterCache.imageDirFor(_dirsOrTemp, book, i);
+        if (await img.exists()) {
+          await img.delete(recursive: true);
+          removed++;
+        }
+      } catch (e) {
+        debugPrint('[cache] 裁剪缓存失败：$e');
+      }
+    }
+    if (removed > 0) {
+      await refreshChapterCache(bookId);
+      if (!_disposed) notifyListeners();
+    }
+    return removed;
   }
 
   /// 删掉「书架里已经不存在的书」留下的缓存目录（B4 / A3 的兜底）。

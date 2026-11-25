@@ -8,6 +8,8 @@ import '../data/book_store.dart';
 import '../data/pet_guide.dart';
 import '../data/pet_store.dart';
 import '../data/prefs.dart';
+import 'cache_space_page.dart';
+import 'download_center_page.dart';
 import '../data/tts_voice_catalog.dart';
 import '../data/tts_voice_store.dart';
 import '../data/stats_store.dart';
@@ -1149,6 +1151,33 @@ class _SettingsPageState extends State<SettingsPage> {
             subtitle: const Text(
               '打开 App 时，按每本书的缓存范围补新章（书籍详情 →「缓存」里改范围）',
               style: TextStyle(fontSize: 12),
+            ),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.downloading_rounded),
+            title: const Text('下载中心', style: TextStyle(fontSize: 14)),
+            subtitle: const Text(
+              '所有缓存任务排队、暂停、重试都在这',
+              style: TextStyle(fontSize: 12),
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => openDownloadCenter(context, store: widget.store),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.pie_chart_outline_rounded),
+            title: const Text('缓存空间', style: TextStyle(fontSize: 14)),
+            subtitle: const Text(
+              '每本书占多少、导出、只保留最近 50 章',
+              style: TextStyle(fontSize: 12),
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) =>
+                    CacheSpacePage(store: widget.store, prefs: widget.prefs),
+              ),
             ),
           ),
           SwitchListTile(

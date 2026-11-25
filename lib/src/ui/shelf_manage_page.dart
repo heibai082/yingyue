@@ -1,7 +1,10 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
+
+import '../data/cache_plan.dart';
+import '../data/download_center.dart';
+import '../data/models.dart';
 
 import '../data/book_store.dart';
-import '../data/models.dart';
 import '../data/prefs.dart';
 
 /// 批量管理书架：多选删除 + 自定义分组。
@@ -44,6 +47,89 @@ class _ShelfManagePageState extends State<ShelfManagePage> {
           ..addAll(_books.map((b) => b.id));
       }
     });
+  }
+
+  /// 批量缓存：给选中的书统一设范围，全部排进下载中心。
+  Future<void> _cacheSelected() async {
+    if (_selected.isEmpty) return;
+    final scope = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '批量缓存范围',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.all_inclusive_rounded),
+              title: const Text('全部章节'),
+              onTap: () => Navigator.pop(ctx, 'all'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.auto_mode_rounded),
+              title: const Text('从当前章到最新（并追更）'),
+              onTap: () => Navigator.pop(ctx, 'from'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.history_rounded),
+              title: const Text('当前章往后 50 章'),
+              onTap: () => Navigator.pop(ctx, '50'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (scope == null || !mounted) return;
+
+    final center = DownloadCenter.instance;
+    var queued = 0;
+    for (final id in _selected.toList()) {
+      final book = widget.store.byId(id);
+      if (book == null || book.format != BookFormat.online) continue;
+      await widget.store.refreshChapterCache(id);
+      final plan = switch (scope) {
+        'from' => BookCachePlan(
+          mode: CacheMode.from,
+          start: book.safeChapterIndex,
+        ),
+        '50' => BookCachePlan(
+          mode: CacheMode.range,
+          start: book.safeChapterIndex,
+          end: (book.safeChapterIndex + 49).clamp(0, book.chapterCount - 1),
+        ),
+        _ => BookCachePlan.defaults,
+      };
+      widget.store.setCachePlan(id, plan);
+      final computed = buildCachePlan(
+        book,
+        cached: book.chapterCache,
+        plan: plan,
+      );
+      if (computed.isEmpty) continue;
+      await center.enqueue(
+        book,
+        indices: computed.indices,
+        cachedBefore: computed.cachedInRange,
+        plan: plan,
+      );
+      queued++;
+    }
+    if (!mounted) return;
+    setState(_selected.clear);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(queued == 0 ? '选中的书都已经缓存好啦' : '已把 $queued 本加入下载队列'),
+      ),
+    );
   }
 
   Future<void> _deleteSelected() async {
@@ -228,30 +314,51 @@ class _ShelfManagePageState extends State<ShelfManagePage> {
           bottomNavigationBar: SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: Row(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _selected.isEmpty ? null : _moveSelected,
-                      icon: const Icon(
-                        Icons.create_new_folder_outlined,
-                        size: 18,
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _selected.isEmpty ? null : _cacheSelected,
+                      icon: const Icon(Icons.cloud_download_rounded, size: 18),
+                      label: Text(
+                        _selected.isEmpty
+                            ? '批量缓存'
+                            : '批量缓存（已选 ${_selected.length} 本）',
                       ),
-                      label: const Text('移动到分组'),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _selected.isEmpty
-                            ? scheme.surfaceContainerHighest
-                            : Colors.redAccent,
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _selected.isEmpty ? null : _moveSelected,
+                          icon: const Icon(
+                            Icons.create_new_folder_outlined,
+                            size: 18,
+                          ),
+                          label: const Text('移动到分组'),
+                        ),
                       ),
-                      onPressed: _selected.isEmpty ? null : _deleteSelected,
-                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                      label: const Text('删除'),
-                    ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _selected.isEmpty
+                                ? scheme.surfaceContainerHighest
+                                : Colors.redAccent,
+                          ),
+                          onPressed: _selected.isEmpty ? null : _deleteSelected,
+                          icon: const Icon(
+                            Icons.delete_outline_rounded,
+                            size: 18,
+                          ),
+                          label: const Text('删除'),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
