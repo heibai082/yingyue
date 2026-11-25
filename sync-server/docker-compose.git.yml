@@ -1,0 +1,13 @@
+﻿services:
+  yingyue-sync:
+    build: "https://github.com/heibai082/yingyue.git#main:sync-server"
+    container_name: yingyue-sync
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      - SYNC_TOKENS=me:change-me,friend:change-me-too
+      - BACKUP_KEEP=14
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/data

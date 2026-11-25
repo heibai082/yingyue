@@ -39,6 +39,9 @@ DATA_DIR = os.environ.get("DATA_DIR", os.path.join(ROOT, "data"))
 BACKUP_KEEP = int(os.environ.get("BACKUP_KEEP", "14"))
 PORT = int(os.environ.get("PORT", "8090"))
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
+
+# 版本号（workflow 会读取这个常量）
+SYNC_VERSION = "1.3"
 USERS_DIR = os.path.join(DATA_DIR, "users")
 
 LOCK = threading.Lock()
@@ -403,11 +406,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/app.js":
             return self._static("app.js", "application/javascript; charset=utf-8")
         if path == "/api/health":
-            return self._json({"ok": True, "uptime": int(time.time() - STARTED_AT), "version": "1.3"})
+            return self._json({"ok": True, "uptime": int(time.time() - STARTED_AT), "version": SYNC_VERSION})
         if path == "/api/config":
             return self._json({
                 "name": "嘤阅同步",
-                "version": "1.3",
+                "version": SYNC_VERSION,
                 "publicUrl": PUBLIC_URL or None,
                 "users": len(set(TOKENS.values())),
                 "features": ["state", "backups", "webdav", "multi-user"],

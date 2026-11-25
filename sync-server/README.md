@@ -3,13 +3,34 @@
 给嘤阅 App 用的私有同步后端：**进度/书签/统计即时同步 + 备份上传下载 + WebDAV 兼容**，
 自带一个 macOS / iOS 风格的网页面板（浅色深色自适应）。
 
-## 起服务
+## 起服务（四种方式，挑一个）
+
+**A. 直接构建（代码在本地）**
 
 ```bash
 cd sync-server
-# 改 docker-compose.yml 里的 SYNC_TOKEN
+# 改 docker-compose.yml 里的 SYNC_TOKEN / SYNC_TOKENS
 docker compose up -d --build
 ```
+
+**B. 用 Docker Hub 镜像**（镜像由 GitHub Actions 构建，`sync-server/docker-compose.image.yml`）
+
+```bash
+docker compose -f docker-compose.image.yml up -d
+```
+
+镜像名：`<DOCKERHUB_USERNAME>/yingyue-sync:1.3`（在仓库 Secrets 配 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 后，
+Actions 里的 `docker-sync` 会自动构建推送；GHCR 版本是 `ghcr.io/<owner>/yingyue-sync:1.3`）。
+
+**C. 从 GitHub 仓库构建**（NAS 能访问 GitHub 时最省事，`sync-server/docker-compose.git.yml`）
+
+```bash
+docker compose -f docker-compose.git.yml up -d
+```
+
+**D. 不用 Docker**：`SYNC_TOKEN=test PORT=8090 python3 server.py`
+
+改完令牌后打开 `http://<IP>:8090`。
 
 打开 `http://<服务器IP>:8090`，输入令牌即可看到：最近同步、最近阅读、备份、设备。
 
