@@ -278,6 +278,31 @@ class SyncClient {
         ];
       });
 
+  /// 服务器上每本书已有哪几章：{path: {index...}}。
+  Future<Map<String, Set<int>>> fetchChapterIndex() =>
+      _withFallback((base) async {
+        final r = await _client
+            .get(_u(base, '/api/chapters/index'), headers: _headers)
+            .timeout(const Duration(seconds: 20));
+        if (r.statusCode != 200) {
+          throw StateError('读取章节索引失败（HTTP ${r.statusCode}）');
+        }
+        final data = jsonDecode(utf8.decode(r.bodyBytes));
+        final raw = data is Map ? data['items'] : null;
+        final out = <String, Set<int>>{};
+        if (raw is Map) {
+          raw.forEach((k, v) {
+            if (v is List) {
+              out['$k'] = {
+                for (final x in v)
+                  if (x is num) x.toInt(),
+              };
+            }
+          });
+        }
+        return out;
+      });
+
   /// 上传一章：正文（小说）或图片地址（漫画，服务端会自己下载图片）。
   Future<void> uploadChapter(Map<String, dynamic> payload) =>
       _withFallback((base) async {

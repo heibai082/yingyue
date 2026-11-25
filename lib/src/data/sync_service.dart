@@ -312,6 +312,73 @@ class SyncService {
     return true;
   }
 
+  /// 静默同步缓存：先问服务器每本书已有哪几章，只传缺的。
+  ///
+  /// 不弹窗、不打扰；返回本次上传章数。失败静默，下次再试。
+  Future<int> silentSync({int limit = 60, bool force = false}) async {
+    if (!enabled || !prefs.syncCache || !prefs.autoUploadCache) return 0;
+    if (prefs.syncCacheWifiOnly && !force && !(await NativeBridge.isOnWifi())) {
+      return 0;
+    }
+    Map<String, Set<int>> remote;
+    try {
+      remote = await client.fetchChapterIndex();
+    } catch (e) {
+      debugPrint('[sync] 读服务器索引失败，退回本地记录: $e');
+      remote = const {};
+    }
+    final uploaded = await _loadUploaded();
+    final pending = <({Book book, int idx})>[];
+    for (final book in store.books) {
+      if (book.chapterCache.isEmpty) continue;
+      final have = remote[book.path] ?? const <int>{};
+      for (final idx in book.chapterCache.toList()..sort()) {
+        if (have.contains(idx)) {
+          uploaded.add(_keyOf(book, idx)); // 服务器已有，记下来别再试
+          continue;
+        }
+        if (!uploaded.contains(_keyOf(book, idx))) {
+          pending.add((book: book, idx: idx));
+        }
+      }
+    }
+    if (pending.isEmpty) {
+      await _saveUploaded(uploaded);
+      return 0;
+    }
+    var done = 0;
+    for (final item in pending.take(limit)) {
+      try {
+        if (await _uploadChapterAt(item.book, item.idx)) {
+          uploaded.add(_keyOf(item.book, item.idx));
+          done++;
+        }
+      } catch (e) {
+        debugPrint('[sync] 静默上传失败: $e');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+    }
+    await _saveUploaded(uploaded);
+    return done;
+  }
+
+  /// 本地缓存里、服务器还没有的章节数（给界面提示用）。
+  Future<int> pendingCacheCount() async {
+    if (!enabled) return 0;
+    Map<String, Set<int>> remote = const {};
+    try {
+      remote = await client.fetchChapterIndex();
+    } catch (_) {}
+    var n = 0;
+    for (final book in store.books) {
+      final have = remote[book.path] ?? const <int>{};
+      for (final idx in book.chapterCache) {
+        if (!have.contains(idx)) n++;
+      }
+    }
+    return n;
+  }
+
   /// 自动补齐：把「已缓存但没上传」的章节传上去，每次最多 [limit] 章。
   ///
   /// 只在开了自动上传、且（可选）在 Wi-Fi 下运行；失败不抛错，下次再试。

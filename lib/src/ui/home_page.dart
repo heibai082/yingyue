@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 
 import '../source/subscription_link.dart';
@@ -178,12 +178,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (Platform.environment['FLUTTER_TEST'] == 'true') return;
     void run() {
       if (!mounted) return;
-      unawaited(_sync.autoPushPending(limit: 10));
+      unawaited(_sync.silentSync(limit: 60));
     }
 
     Timer(const Duration(seconds: 20), run);
     _cacheSyncTimer?.cancel();
-    _cacheSyncTimer = Timer.periodic(const Duration(minutes: 3), (_) => run());
+    _cacheSyncTimer = Timer.periodic(const Duration(minutes: 2), (_) => run());
   }
   // ==================== WebDAV 自动备份 ====================
 

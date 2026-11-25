@@ -1324,7 +1324,7 @@ class _SettingsPageState extends State<SettingsPage> {
     platform: Platform.operatingSystem,
   );
 
-  /// 把手机上已经缓存的正文 / 漫画批量传到同步服务器（网页端就能直接看）。
+  /// 后台静默上传本机缓存（只传服务器没有的章节），不弹进度框。
   Future<void> _uploadCachedContent(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
     if (!widget.prefs.syncEnabled || widget.prefs.syncBaseUrl.isEmpty) {
@@ -1335,81 +1335,26 @@ class _SettingsPageState extends State<SettingsPage> {
       messenger.showSnackBar(const SnackBar(content: Text('先打开「同步正文 / 图片」开关')));
       return;
     }
-    var total = 0;
-    for (final b in widget.store.books) {
-      total += b.chapterCache.length;
-    }
-    if (total == 0) {
-      messenger.showSnackBar(const SnackBar(content: Text('本机还没有已缓存的章节')));
-      return;
-    }
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('上传本机缓存'),
-        content: Text('把 $total 章已缓存内容传到服务器？\n漫画图片会按话上传，单话超过 8MB 会跳过。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('开始上传'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !context.mounted) return;
-
-    final progress = ValueNotifier<double>(0);
-    final label = ValueNotifier<String>('准备中…');
     final sync = _mkSync();
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text('正在上传缓存'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ValueListenableBuilder<double>(
-              valueListenable: progress,
-              builder: (_, v, _) => LinearProgressIndicator(value: v),
-            ),
-            const SizedBox(height: 10),
-            ValueListenableBuilder<String>(
-              valueListenable: label,
-              builder: (_, v, _) =>
-                  Text(v, style: const TextStyle(fontSize: 12)),
-            ),
-          ],
-        ),
-      ),
-    );
     try {
-      final result = await sync.pushCachedContent(
-        onProgress: (done, all) {
-          progress.value = all == 0 ? 0 : done / all;
-          label.value = '$done / $all 章';
-        },
-      );
-      if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+      final pending = await sync.pendingCacheCount();
+      if (pending == 0) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('服务器上已经是最新的，没有要传的')),
+        );
+        sync.dispose();
+        return;
+      }
       messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            '上传完成：成功 ${result.chapters} 章'
-            '${result.skipped > 0 ? '，跳过 ${result.skipped} 章' : ''}',
-          ),
-        ),
+        SnackBar(content: Text('开始后台上传（服务器缺 $pending 章），可以继续看书')),
+      );
+      // 后台跑，不阻塞界面
+      unawaited(
+        sync.silentSync(limit: 500, force: true).whenComplete(sync.dispose),
       );
     } catch (e) {
-      if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
-      messenger.showSnackBar(SnackBar(content: Text('上传失败：$e')));
-    } finally {
       sync.dispose();
-      progress.dispose();
-      label.dispose();
+      messenger.showSnackBar(SnackBar(content: Text('上传失败：$e')));
     }
   }
 
@@ -1424,7 +1369,7 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       final r = await sync.syncNow();
       // 手动同步时顺便把缓存也推上去（不受「仅 Wi-Fi」限制）
-      final cached = await sync.autoPushPending(limit: 50, force: true);
+      final cached = await sync.silentSync(limit: 100, force: true);
       messenger.hideCurrentSnackBar();
       messenger.showSnackBar(
         SnackBar(content: Text(cached > 0 ? '，上传  章缓存' : r.summary)),

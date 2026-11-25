@@ -374,6 +374,37 @@ def load_chapter(udir, path, index):
         return None
 
 
+def chapter_index(udir):
+    """返回 {bookPath: [章号]}，只扫文件名，快。"""
+    root = chapters_dir(udir)
+    out = {}
+    try:
+        dirs = os.listdir(root)
+    except FileNotFoundError:
+        return out
+    # 目录名是 sha1(path)[:16]，需要反查 path：从 state 里拿
+    st = load_state(udir)
+    key_to_path = {}
+    for b in st.get("books") or []:
+        p = b.get("path")
+        if p:
+            key_to_path[chapter_key(p)] = p
+    for name in dirs:
+        folder = os.path.join(root, name)
+        if not os.path.isdir(folder):
+            continue
+        path = key_to_path.get(name)
+        if not path:
+            continue
+        idxs = []
+        for f in os.listdir(folder):
+            m = re.match(r"^(\d+)\.json$", f)
+            if m:
+                idxs.append(int(m.group(1)))
+        if idxs:
+            out[path] = sorted(idxs)
+    return out
+
 def list_chapters(udir, path):
     d = os.path.join(chapters_dir(udir), chapter_key(path))
     out = []
@@ -661,6 +692,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, data, ctype.split(";")[0])
             except Exception:
                 return self._send(502, b"")
+        if path == "/api/chapters/index":
+            return self._json({"items": chapter_index(udir)})
         if path == "/api/chapters/list":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             p = (q.get("path") or [""])[0]

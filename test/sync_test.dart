@@ -343,4 +343,53 @@ void main() {
       expect(posts, 1);
     });
   });
+  group('静默上传（只传服务器没有的）', () {
+    test('服务器已有第 0 章时只传第 1 章，再跑不重复', () async {
+      store.addOnline(_book('p/s', chapter: 0, lastReadAt: 1));
+      final book = store.byId('p/s')!;
+      await store.writeCachedChapter(book, 0, '第0章正文');
+      await store.writeCachedChapter(book, 1, '第1章正文');
+      await store.refreshChapterCache(book.id);
+      expect(book.chapterCache, containsAll([0, 1]));
+
+      var uploads = 0;
+      prefs.setSyncConfig(
+        baseUrl: 'http://srv:8090',
+        token: 't',
+        enabled: true,
+        cache: true,
+        autoUpload: true,
+        wifiOnly: false,
+      );
+      final sync = SyncService(
+        prefs: prefs,
+        store: store,
+        client: SyncClient(
+          baseUrl: 'http://srv:8090',
+          token: 't',
+          client: MockClient((req) async {
+            if (req.url.path == '/api/chapters/index') {
+              return http.Response.bytes(
+                utf8.encode('{"items":{"p/s":[0]}}'),
+                200,
+                headers: {'content-type': 'application/json; charset=utf-8'},
+              );
+            }
+            if (req.url.path == '/api/chapters' && req.method == 'POST') {
+              uploads++;
+              final body = jsonDecode(req.body) as Map<String, dynamic>;
+              expect(body['index'], 1);
+            }
+            return http.Response('{"ok":true}', 200);
+          }),
+        ),
+      );
+      addTearDown(sync.dispose);
+      expect(await sync.pendingCacheCount(), 1);
+      expect(await sync.silentSync(force: true), 1);
+      expect(uploads, 1);
+      expect(await sync.silentSync(force: true), 0);
+      expect(uploads, 1);
+    });
+  });
 }

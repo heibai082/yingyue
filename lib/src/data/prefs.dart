@@ -121,7 +121,7 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   bool autoUploadCache = true;
 
   /// 自动上传仅在 Wi-Fi 下进行。
-  bool syncCacheWifiOnly = true;
+  bool syncCacheWifiOnly = false;
   int lastSyncAt = 0;
   String syncDeviceName = '';
 
@@ -454,7 +454,7 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           syncEnabled = data['syncEnabled'] as bool? ?? false;
           syncCache = data['syncCache'] as bool? ?? true;
           autoUploadCache = data['autoUploadCache'] as bool? ?? true;
-          syncCacheWifiOnly = data['syncCacheWifiOnly'] as bool? ?? true;
+          syncCacheWifiOnly = data['syncCacheWifiOnly'] as bool? ?? false;
           lastSyncAt = (data['lastSyncAt'] as num?)?.toInt() ?? 0;
           syncDeviceName = data['syncDeviceName'] as String? ?? '';
           lastAutoBackupDay = data['lastAutoBackupDay'] as String? ?? '';
