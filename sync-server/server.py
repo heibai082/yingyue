@@ -689,7 +689,12 @@ class Handler(BaseHTTPRequestHandler):
                     ctype = r.headers.get("Content-Type") or "image/jpeg"
                 if len(data) > 15 * 1024 * 1024:
                     return self._send(413, b"")
-                return self._send(200, data, ctype.split(";")[0])
+                return self._send(
+                    200,
+                    data,
+                    ctype.split(";")[0],
+                    {"Cache-Control": "public, max-age=86400"},
+                )
             except Exception:
                 return self._send(502, b"")
         if path == "/api/chapters/index":
@@ -731,7 +736,15 @@ class Handler(BaseHTTPRequestHandler):
                             ctype = "image/png"
                         elif name.endswith(".webp"):
                             ctype = "image/webp"
-                        return self._send(200, data, ctype)
+                        return self._send(
+                            200,
+                            data,
+                            ctype,
+                            {
+                                "Cache-Control": "public, max-age=31536000, immutable",
+                                "ETag": '"%s-%s"' % (key, name),
+                            },
+                        )
             except FileNotFoundError:
                 pass
             return self._send(404, b"")
@@ -1074,7 +1087,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "missing static file"}, 404)
         with open(p, "rb") as f:
             data = f.read()
-        self._send(200, data, ctype)
+        # 前端文件不缓存，改完刷新就能拿到新的
+        self._send(200, data, ctype, {"Cache-Control": "no-cache"})
 
 
 def migrate_legacy():

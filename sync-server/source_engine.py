@@ -14,6 +14,7 @@
 `{{key}}` / `{{page}}` 会替换；每个源一个 CookieJar，搜索→目录→正文共享。
 """
 
+import base64
 import gzip
 import html as html_lib
 import http.cookiejar
@@ -533,6 +534,60 @@ def fetch_toc(source, book_url, timeout=20):
     return {"title": "", "chapters": chapters, "finalUrl": final_url}
 
 
+
+# ---------------- <js> 规则：常见「params + AES」漫画站 ----------------
+def _extract_js_key(js):
+    m = re.search(r"java\.lang\.String\(['\"]([^'\"]+)['\"]\)", js)
+    return m.group(1).encode("utf-8") if m else b""
+
+
+def _js_decrypt_images(js, html, base_url):
+    """支持 `params = 'base64'` + AES/CBC 的站点（漫画团这类）。"""
+    m = re.search(r"params\s*=\s*['\"]([^'\"]+)['\"]", html)
+    if not m:
+        return []
+    key = _extract_js_key(js)
+    if not key:
+        return []
+    text_b64 = m.group(1)
+    # JS 字符串里的转义：\/ \u002b \u003d 之类
+    text_b64 = text_b64.replace("\\/", "/")
+    text_b64 = re.sub(r"\\u([0-9a-fA-F]{4})", lambda x: chr(int(x.group(1), 16)), text_b64)
+    text_b64 = text_b64.replace("\\n", "").replace("\\r", "")
+    try:
+        raw = base64.b64decode(text_b64 + "=" * (-len(text_b64) % 4))
+    except Exception as e:
+        print("[js] base64 解码失败: %s" % e)
+        return []
+    if len(raw) < 32:
+        return []
+    iv, ct = raw[:16], raw[16:]
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+        dec = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+        data = dec.update(ct) + dec.finalize()
+        pad = data[-1]
+        if 0 < pad <= 16:
+            data = data[:-pad]
+        obj = json.loads(data.decode("utf-8", "replace"))
+    except Exception as e:
+        print("[js] 解密失败: %s" % e)
+        return []
+    arr = obj.get("chapter_images") or []
+    host = ((obj.get("images_hosts") or [""])[0] or "").rstrip("/")
+    out = []
+    for u in arr:
+        u = str(u)
+        if not u.startswith("http"):
+            if host:
+                u = host + "/" + base64.b64encode(u.encode()).decode()
+            else:
+                u = urllib.parse.urljoin(base_url, u)
+        out.append(u)
+    return out
+
+
 def fetch_content(source, chapter_url, timeout=25):
     session = SourceSession(source)
     text, final_url, _, _ = session.fetch(chapter_url, timeout=timeout)
@@ -542,10 +597,18 @@ def fetch_content(source, chapter_url, timeout=25):
         vals = eval_rule(content_rule, text)
         plain = "\n".join(vals)
         return {"title": "", "text": plain, "images": []}
+    # <js> 规则：交给专门的解密器，解不出来就明确返回空（别退回整页抓 logo）
+    if content_rule.startswith("<js>") or content_rule.startswith("<JS>"):
+        js = content_rule[4:]
+        js = js.split("</js>")[0].split("</JS>")[0]
+        imgs = _js_decrypt_images(js, text, final_url)
+        return {"title": "", "text": "", "images": imgs}
+
     root = parse_html(text)
     nodes = _select([root], content_rule) if content_rule else [root]
-    if not nodes:
-        nodes = [root]
+    if content_rule and not nodes:
+        # 规则不匹配就返回空，不要拿整页图片冒充正文
+        return {"title": "", "text": "", "images": []}
     # 图片：内容节点里的 img
     images = []
     for n in nodes:

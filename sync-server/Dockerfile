@@ -1,6 +1,8 @@
 ﻿FROM python:3.12-slim
 
 WORKDIR /app
+RUN pip install --no-cache-dir cryptography
+
 COPY server.py source_engine.py ./
 COPY static ./static
 

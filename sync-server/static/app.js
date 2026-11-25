@@ -342,9 +342,29 @@ function showChapterList() {
       <span class="muted">${c.hasText ? '正文' : ''}${c.images ? c.images + ' 图' : ''}</span>
     </div>`).join('')}</div>`;
   $('#reader-body').querySelectorAll('[data-idx]').forEach((el) => {
-    el.onclick = () => loadChapter(Number(el.dataset.idx));
+    el.onclick = () => {
+      const idx = Number(el.dataset.idx);
+      reader.pos = reader.chapters.findIndex((c) => Number(c.index) === idx);
+      loadChapter(idx);
+    };
   });
   if (b) $('#reader-sub').textContent += ` · 当前第 ${Number(b.chapterIndex || 0) + 1} 章`;
+}
+
+
+function renderImages(urls) {
+  const box = $('#reader-body');
+  box.innerHTML = urls
+    .map((u, i) => `<img src="${esc(u)}" loading="${i < 3 ? 'eager' : 'lazy'}" decoding="async" />`)
+    .join('');
+  // 后台并发预取，滚动到哪就已经在缓存里了
+  urls.forEach((u, i) => {
+    if (i < 3) return;
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = u;
+  });
+  box.scrollTop = 0;
 }
 
 async function loadChapter(index) {
@@ -358,7 +378,7 @@ async function loadChapter(index) {
     $('#reader-title').textContent = data.title || b.title || '';
     $('#reader-sub').textContent = `${b.title || ''} · 第 ${index + 1} 章`;
     if (data.images && data.images.length) {
-      $('#reader-body').innerHTML = data.images.map((u) => `<img src="${esc(u)}" loading="lazy" />`).join('');
+      renderImages(data.images);
     } else if (data.text) {
       $('#reader-body').innerHTML = `<div class="reader-text">${esc(data.text)}</div>`;
     } else {
@@ -387,12 +407,49 @@ async function loadChapter(index) {
   }
 }
 
+function toast(text) {
+  let el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = text;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2000);
+}
+
 function stepChapter(delta) {
-  const idx = reader.chapters.findIndex((c) => c.index === reader.index);
-  if (idx < 0) return;
-  const next = idx + delta;
-  if (next < 0 || next >= reader.chapters.length) return;
-  loadChapter(reader.chapters[next].index);
+  const list = reader.chapters || [];
+  if (!list.length) {
+    toast('还没有可切换的章节（这本只同步了这一话）');
+    return;
+  }
+  let pos = Number.isInteger(reader.pos) ? reader.pos : -1;
+  if (pos < 0) pos = list.findIndex((c) => Number(c.index) === Number(reader.index));
+  if (pos < 0) pos = 0;
+  const next = pos + delta;
+  if (next < 0) { toast('已经是第一章了'); return; }
+  if (next >= list.length) { toast('已经是最后一章了'); return; }
+  reader.pos = next;
+  loadChapter(list[next].index);
+}
+
+function stepChapterOld(delta) {
+  const list = reader.chapters || [];
+  if (!list.length) {
+    toast('还没有可切换的章节（这本只同步了这一话）');
+    return;
+  }
+  let pos = list.findIndex((c) => Number(c.index) === Number(reader.index));
+  if (pos < 0) pos = list.findIndex((c) => Number(c.index) > Number(reader.index));
+  if (pos < 0) pos = list.length - 1;
+  const next = pos + delta;
+  if (next < 0) {
+    toast('已经是第一章了');
+    return;
+  }
+  if (next >= list.length) {
+    toast('已经是最后一章了');
+    return;
+  }
+  loadChapter(list[next].index);
 }
 
 $('#reader-back').onclick = () => {
@@ -578,7 +635,7 @@ async function loadOnlineChapter(online, index) {
   try {
     const data = await api(`/api/read?source=${encodeURIComponent(online.item.sourceUrl)}&url=${encodeURIComponent(ch.url)}`);
     if (data.images && data.images.length) {
-      $('#reader-body').innerHTML = data.images.map((u) => `<img src="${esc(u)}" loading="lazy" />`).join('');
+      renderImages(data.images);
     } else if (data.text) {
       $('#reader-body').innerHTML = `<div class="reader-text">${esc(data.text)}</div>`;
     } else {
