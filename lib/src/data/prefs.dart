@@ -110,8 +110,12 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
 
   /// 同步服务器（嘤阅同步服务的地址 / 令牌 / 开关）。
   String syncBaseUrl = '';
+  String syncLanUrl = '';
   String syncToken = '';
   bool syncEnabled = false;
+
+  /// 连正文 / 漫画图片也同步到服务器（网页端才能直接读）。
+  bool syncCache = true;
   int lastSyncAt = 0;
   String syncDeviceName = '';
 
@@ -439,8 +443,10 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           dailyGoalMinutes = (data['dailyGoalMinutes'] as num?)?.toInt() ?? 0;
           autoBackupEnabled = data['autoBackupEnabled'] as bool? ?? false;
           syncBaseUrl = data['syncBaseUrl'] as String? ?? '';
+          syncLanUrl = data['syncLanUrl'] as String? ?? '';
           syncToken = data['syncToken'] as String? ?? '';
           syncEnabled = data['syncEnabled'] as bool? ?? false;
+          syncCache = data['syncCache'] as bool? ?? true;
           lastSyncAt = (data['lastSyncAt'] as num?)?.toInt() ?? 0;
           syncDeviceName = data['syncDeviceName'] as String? ?? '';
           lastAutoBackupDay = data['lastAutoBackupDay'] as String? ?? '';
@@ -679,14 +685,18 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
 
   void setSyncConfig({
     String? baseUrl,
+    String? lanUrl,
     String? token,
     String? deviceName,
     bool? enabled,
+    bool? cache,
   }) {
     if (baseUrl != null) syncBaseUrl = baseUrl.trim();
+    if (lanUrl != null) syncLanUrl = lanUrl.trim();
     if (token != null) syncToken = token.trim();
     if (deviceName != null) syncDeviceName = deviceName.trim();
     if (enabled != null) syncEnabled = enabled;
+    if (cache != null) syncCache = cache;
     _saveSoon();
     notifyListeners();
   }
@@ -1161,8 +1171,10 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
         'dailyGoalMinutes': dailyGoalMinutes,
         'autoBackupEnabled': autoBackupEnabled,
         'syncBaseUrl': syncBaseUrl,
+        'syncLanUrl': syncLanUrl,
         'syncToken': syncToken,
         'syncEnabled': syncEnabled,
+        'syncCache': syncCache,
         'lastSyncAt': lastSyncAt,
         'syncDeviceName': syncDeviceName,
         'lastAutoBackupDay': lastAutoBackupDay,

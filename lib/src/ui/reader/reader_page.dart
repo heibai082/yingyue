@@ -17,6 +17,7 @@ import '../../data/book_store.dart';
 import '../../data/cache_plan.dart';
 import '../../data/cache_tracker.dart';
 import '../../data/chapter_patch.dart';
+import '../../data/sync_service.dart';
 import '../../data/models.dart';
 import '../../data/paginator.dart';
 import '../../data/offline_downloader.dart';
@@ -140,6 +141,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 离线缓存（仅在线书用；一次一个任务）——按本书的「缓存范围」下。
   late final CacheTracker _tracker = CacheTracker(store: widget.store);
 
+  /// 同步服务：把正文传到自建服务器（网页端能直接读）。
+  late final SyncService _sync = SyncService(
+    prefs: widget.prefs,
+    store: widget.store,
+    platform: Platform.operatingSystem,
+  );
+
   /// 离线下载进度（null = 未在下载）。
   OfflineDownloadProgress? _offlineProgress;
 
@@ -239,6 +247,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _content?.dispose();
     _tracker.dispose();
+    _sync.dispose();
     super.dispose();
   }
 
@@ -389,6 +398,19 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       _rawTextCache[_chapterIndex] = raw;
       slowTimer?.cancel();
       if (!mounted) return;
+      // 同步正文（在线书 + 开了同步缓存）：网页端靠它直接看书
+      if (book.format == BookFormat.online &&
+          widget.prefs.syncEnabled &&
+          widget.prefs.syncCache) {
+        unawaited(
+          _sync.uploadChapterText(
+            path: book.path,
+            index: _chapterIndex,
+            title: book.chapters[_chapterIndex].title,
+            text: raw,
+          ),
+        );
+      }
       _chapterText = _processText(_chapterIndex, raw);
       _layoutSig = '';
       // 滚动流的起点永远跟着「当前章」走：换章后重建，

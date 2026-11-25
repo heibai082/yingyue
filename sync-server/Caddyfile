@@ -1,0 +1,4 @@
+﻿{$SYNC_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy yingyue-sync:8090
+}

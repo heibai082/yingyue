@@ -18,7 +18,10 @@ class SyncService {
     String platform = 'android',
   }) : _client = client,
        _platform = platform {
-    if (client != null) _clientKey = '${prefs.syncBaseUrl}|${prefs.syncToken}';
+    if (client != null) {
+      _clientKey =
+          '${prefs.syncBaseUrl}|${prefs.syncLanUrl}|${prefs.syncToken}';
+    }
   }
 
   final AppPrefs prefs;
@@ -37,10 +40,14 @@ class SyncService {
   bool get enabled => prefs.syncEnabled && prefs.syncBaseUrl.trim().isNotEmpty;
 
   SyncClient get client {
-    final key = '${prefs.syncBaseUrl}|${prefs.syncToken}';
+    final key = '${prefs.syncBaseUrl}|${prefs.syncLanUrl}|${prefs.syncToken}';
     if (_client == null || _clientKey != key) {
       _client?.close();
-      _client = SyncClient(baseUrl: prefs.syncBaseUrl, token: prefs.syncToken);
+      // 外网地址优先，其次家里内网；哪个能连就用哪个
+      _client = SyncClient(
+        baseUrls: [prefs.syncBaseUrl, prefs.syncLanUrl],
+        token: prefs.syncToken,
+      );
       _clientKey = key;
     }
     return _client!;
@@ -136,6 +143,49 @@ class SyncService {
   Future<SyncResult?> pullOnStartup() async {
     if (!enabled) return null;
     return pull();
+  }
+
+  /// 上传一章正文（开了「同步缓存」才发）。
+  Future<void> uploadChapterText({
+    required String path,
+    required int index,
+    required String title,
+    required String text,
+  }) async {
+    if (!enabled || !prefs.syncCache) return;
+    if (text.trim().isEmpty || text.length > 2 * 1024 * 1024) return;
+    try {
+      await client.uploadChapter({
+        'path': path,
+        'index': index,
+        'title': title,
+        'text': text,
+      });
+    } catch (e) {
+      debugPrint('[sync] upload text failed: $e');
+    }
+  }
+
+  /// 上传漫画这一话的图片地址（服务端下载图片，网页端直接看）。
+  Future<void> uploadChapterImages({
+    required String path,
+    required int index,
+    required String title,
+    required List<String> urls,
+    String referer = '',
+  }) async {
+    if (!enabled || !prefs.syncCache || urls.isEmpty) return;
+    try {
+      await client.uploadChapter({
+        'path': path,
+        'index': index,
+        'title': title,
+        'images': urls,
+        'referer': referer,
+      });
+    } catch (e) {
+      debugPrint('[sync] upload images failed: $e');
+    }
   }
 
   void dispose() {

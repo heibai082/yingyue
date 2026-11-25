@@ -115,79 +115,146 @@ List<int> applyRemoteState(
 }
 
 /// HTTP 客户端（可注入 MockClient 测试）。
+///
+/// 支持配置多个地址（例如「外网域名 + 家里内网 IP」）：每次同步先探测哪个能连，
+/// 连上就用哪个；中途断线自动换下一个。这样一个 App 在家/在外都不用改设置。
 class SyncClient {
   SyncClient({
-    required String baseUrl,
+    String? baseUrl,
+    List<String>? baseUrls,
     required this.token,
     http.Client? client,
-  }) : _base = baseUrl.trim().replaceAll(RegExp(r'/+$'), ''),
+  }) : _bases = _normalize([if (baseUrl != null) baseUrl, ...?baseUrls]),
        _client = client ?? http.Client();
 
-  final String _base;
+  final List<String> _bases;
   final String token;
   final http.Client _client;
+  String? _active;
 
-  bool get configured => _base.isNotEmpty;
+  static List<String> _normalize(Iterable<String> urls) {
+    final out = <String>[];
+    for (final u in urls) {
+      final s = u.trim().replaceAll(RegExp(r'/+$'), '');
+      if (s.isNotEmpty && !out.contains(s)) out.add(s);
+    }
+    return out;
+  }
 
-  Uri _u(String path) => Uri.parse('$_base$path');
+  bool get configured => _bases.isNotEmpty;
+
+  /// 当前用哪个地址（没探测过时给第一个）。
+  String get activeBase => _active ?? (_bases.isEmpty ? '' : _bases.first);
+
+  List<String> get bases => List.unmodifiable(_bases);
+
+  Uri _u(String base, String path) => Uri.parse('$base$path');
 
   Map<String, String> get _headers => {
     'Authorization': 'Bearer $token',
     'Content-Type': 'application/json; charset=utf-8',
   };
 
-  /// 健康检查（不需要令牌）。
-  Future<bool> ping() async {
-    if (!configured) return false;
-    try {
-      final r = await _client
-          .get(_u('/api/health'))
-          .timeout(const Duration(seconds: 6));
-      return r.statusCode == 200;
-    } catch (_) {
-      return false;
+  /// 探测能用的地址（/api/health 不需要令牌）。
+  Future<String?> _probe() async {
+    for (final base in _bases) {
+      try {
+        final r = await _client
+            .get(_u(base, '/api/health'))
+            .timeout(const Duration(seconds: 4));
+        if (r.statusCode == 200) return base;
+      } catch (_) {
+        // 试下一个
+      }
     }
+    return null;
   }
 
-  Future<Map<String, dynamic>> fetchState() async {
+  Future<bool> ping() async {
+    _active = await _probe();
+    return _active != null;
+  }
+
+  /// 依次尝试：当前地址优先，然后其它；都失败抛最后一个错。
+  Future<T> _withFallback<T>(Future<T> Function(String base) run) async {
+    final order = <String>[
+      if (_active != null && _bases.contains(_active)) _active!,
+      ..._bases.where((b) => b != _active),
+    ];
+    if (order.isEmpty) throw StateError('还没配置同步地址');
+    Object? last;
+    for (final base in order) {
+      try {
+        final r = await run(base);
+        _active = base;
+        return r;
+      } catch (e) {
+        last = e;
+        _active = null;
+      }
+    }
+    throw StateError('所有同步地址都连不上（$last）');
+  }
+
+  Future<Map<String, dynamic>> fetchState() => _withFallback((base) async {
     final r = await _client
-        .get(_u('/api/state'), headers: _headers)
+        .get(_u(base, '/api/state'), headers: _headers)
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) {
       throw StateError('拉取失败（HTTP ${r.statusCode}）');
     }
     final data = jsonDecode(utf8.decode(r.bodyBytes));
     return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
-  }
+  });
 
-  Future<void> pushState(Map<String, dynamic> payload) async {
-    final r = await _client
-        .post(_u('/api/state'), headers: _headers, body: jsonEncode(payload))
-        .timeout(const Duration(seconds: 12));
-    if (r.statusCode != 200) {
-      throw StateError('推送失败（HTTP ${r.statusCode}）');
-    }
-  }
+  Future<void> pushState(Map<String, dynamic> payload) =>
+      _withFallback((base) async {
+        final r = await _client
+            .post(
+              _u(base, '/api/state'),
+              headers: _headers,
+              body: jsonEncode(payload),
+            )
+            .timeout(const Duration(seconds: 12));
+        if (r.statusCode != 200) {
+          throw StateError('推送失败（HTTP ${r.statusCode}）');
+        }
+      });
 
-  /// 上传备份 zip（走 /api/backups，服务端自动保留最近 N 份）。
-  Future<String?> uploadBackup(List<int> zipBytes) async {
-    final r = await _client
-        .post(
-          _u('/api/backups'),
-          headers: {
-            'Authorization': 'Bearer $token',
-            'Content-Type': 'application/zip',
-          },
-          body: zipBytes,
-        )
-        .timeout(const Duration(seconds: 60));
-    if (r.statusCode != 200) {
-      throw StateError('上传备份失败（HTTP ${r.statusCode}）');
-    }
-    final data = jsonDecode(utf8.decode(r.bodyBytes));
-    return data is Map ? data['name']?.toString() : null;
-  }
+  /// 上传备份 zip（服务端自动保留最近 N 份）。
+  Future<String?> uploadBackup(List<int> zipBytes) =>
+      _withFallback((base) async {
+        final r = await _client
+            .post(
+              _u(base, '/api/backups'),
+              headers: {
+                'Authorization': 'Bearer $token',
+                'Content-Type': 'application/zip',
+              },
+              body: zipBytes,
+            )
+            .timeout(const Duration(seconds: 60));
+        if (r.statusCode != 200) {
+          throw StateError('上传备份失败（HTTP ${r.statusCode}）');
+        }
+        final data = jsonDecode(utf8.decode(r.bodyBytes));
+        return data is Map ? data['name']?.toString() : null;
+      });
 
+  /// 上传一章：正文（小说）或图片地址（漫画，服务端会自己下载图片）。
+  Future<void> uploadChapter(Map<String, dynamic> payload) =>
+      _withFallback((base) async {
+        final r = await _client
+            .post(
+              _u(base, '/api/chapters'),
+              headers: _headers,
+              body: jsonEncode(payload),
+            )
+            .timeout(const Duration(seconds: 90));
+        if (r.statusCode != 200) {
+          throw StateError('上传章节失败（HTTP ${r.statusCode}）');
+        }
+      });
   void close() => _client.close();
 }
 

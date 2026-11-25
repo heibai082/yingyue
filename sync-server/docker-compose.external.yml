@@ -1,0 +1,30 @@
+﻿services:
+  yingyue-sync:
+    build: .
+    image: yingyue-sync:1.1
+    container_name: yingyue-sync
+    restart: unless-stopped
+    environment:
+      - SYNC_TOKEN=change-me
+      - BACKUP_KEEP=14
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: yingyue-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - SYNC_DOMAIN=${SYNC_DOMAIN:-sync.example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,4 +1,4 @@
-// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
+﻿// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
 //
 // 设计取舍：
 //   - 不做分页手势（左右滑），先做「一条长图往下滚」，和站点本身一致，
@@ -18,6 +18,7 @@ import '../../data/prefs.dart';
 import '../../source/analyze_url.dart';
 import '../../source/models.dart';
 import '../../data/comic_view.dart';
+import '../../data/sync_service.dart';
 import '../../source/ad_page_filter.dart';
 import '../../source/chapter_order.dart';
 import '../../source/comic_chapter_cache.dart';
@@ -68,6 +69,13 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
 
   Timer? _cacheSaveTimer;
 
+  /// 同步：把这一话的图片地址传给服务器（网页端能直接看）。
+  late final SyncService _sync = SyncService(
+    prefs: widget.prefs,
+    store: widget.store,
+    platform: Platform.operatingSystem,
+  );
+
   ComicChapterCache get _chapterCache =>
       _caches.putIfAbsent(widget.bookId, ComicChapterCache.new);
 
@@ -107,6 +115,7 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
     unawaited(_chapterCache.saveTo(_cacheFile));
     _scroll.dispose();
     _service.dispose();
+    _sync.dispose();
     super.dispose();
   }
 
@@ -191,6 +200,17 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
   /// 都不挡当前这一话的显示 —— 这是「打开不转圈」的关键。
   void _afterLoaded(Book book, int index, String href, List<String> urls) {
     widget.store.updateProgress(book.id, chapter: index, offset: 0);
+    if (widget.prefs.syncEnabled && widget.prefs.syncCache) {
+      unawaited(
+        _sync.uploadChapterImages(
+          path: book.path,
+          index: index,
+          title: book.chapters[index].title,
+          urls: urls,
+          referer: href,
+        ),
+      );
+    }
     _warmFirstPages(urls);
     unawaited(_stripAdsInBackground(href, urls));
     // 缓存整话的图片：下次进来（甚至断网）直接从磁盘出图，不再一张张转圈

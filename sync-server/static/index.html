@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
@@ -24,6 +24,7 @@
           <div class="side-group">
             <div class="side-title">同步</div>
             <button class="nav active" data-view="overview"><span>📚</span>概览</button>
+            <button class="nav" data-view="shelf"><span>📖</span>书架</button>
             <button class="nav" data-view="recent"><span>🕒</span>最近阅读</button>
             <button class="nav" data-view="backups"><span>🗂️</span>备份</button>
             <button class="nav" data-view="devices"><span>📱</span>设备</button>
@@ -45,6 +46,13 @@
             <div class="card">
               <div class="card-head"><h3>最近同步</h3><span id="updated-at" class="muted"></span></div>
               <div id="latest-books" class="list"></div>
+            </div>
+          </section>
+
+          <section id="view-shelf" class="view">
+            <div class="card">
+              <div class="card-head"><h3>书架</h3><span class="muted">点一本书直接看（已同步的章节）</span></div>
+              <div id="shelf-list" class="list"></div>
             </div>
           </section>
 
@@ -84,6 +92,19 @@
       </div>
     </form>
   </dialog>
+
+  <div id="reader" class="reader hidden">
+    <header class="reader-bar">
+      <button id="reader-back" class="btn">← 返回</button>
+      <div class="grow">
+        <div id="reader-title" class="reader-title">—</div>
+        <div id="reader-sub" class="muted"></div>
+      </div>
+      <button id="reader-prev" class="btn">上一章</button>
+      <button id="reader-next" class="btn">下一章</button>
+    </header>
+    <div id="reader-body" class="reader-body"></div>
+  </div>
 
   <script src="/app.js"></script>
 </body>

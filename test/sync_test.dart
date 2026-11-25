@@ -222,4 +222,24 @@ void main() {
       expect(prefs.lastSyncAt, greaterThan(0));
     });
   });
+  test('上传章节：JSON 里带 path/index/images', () async {
+    Map<String, dynamic>? body;
+    final client = SyncClient(
+      baseUrl: 'http://srv:8090',
+      token: 't',
+      client: MockClient((req) async {
+        body = jsonDecode(req.body) as Map<String, dynamic>;
+        return http.Response('{"ok":true}', 200);
+      }),
+    );
+    await client.uploadChapter({
+      'path': 'p/a',
+      'index': 3,
+      'title': '第4章',
+      'images': ['http://i/1.jpg'],
+    });
+    expect(body?['path'], 'p/a');
+    expect(body?['index'], 3);
+    expect((body?['images'] as List), hasLength(1));
+  });
 }

@@ -1343,9 +1343,11 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 同步服务器配置弹窗：地址 / 令牌 / 设备名 / 开关，可先测连接。
   Future<void> _showSyncServerDialog(BuildContext context) async {
     final urlCtrl = TextEditingController(text: widget.prefs.syncBaseUrl);
+    final lanCtrl = TextEditingController(text: widget.prefs.syncLanUrl);
     final tokenCtrl = TextEditingController(text: widget.prefs.syncToken);
     final deviceCtrl = TextEditingController(text: widget.prefs.syncDeviceName);
     var enabled = widget.prefs.syncEnabled;
+    var syncCache = widget.prefs.syncCache;
     String? status;
     var testing = false;
     final messenger = ScaffoldMessenger.of(context);
@@ -1393,6 +1395,19 @@ class _SettingsPageState extends State<SettingsPage> {
                     style: TextStyle(fontSize: 11.5),
                   ),
                 ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: syncCache,
+                  onChanged: (v) => setDialogState(() => syncCache = v),
+                  title: const Text(
+                    '同步正文 / 图片',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  subtitle: const Text(
+                    '开：网页端能直接看书/看漫画；关：只同步进度和书签',
+                    style: TextStyle(fontSize: 11.5),
+                  ),
+                ),
                 if (status != null)
                   Text(
                     status!,
@@ -1416,7 +1431,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         status = '正在测试…';
                       });
                       final client = SyncClient(
-                        baseUrl: urlCtrl.text,
+                        baseUrls: [urlCtrl.text, lanCtrl.text],
                         token: tokenCtrl.text,
                       );
                       final ok = await client.ping();
@@ -1436,9 +1451,11 @@ class _SettingsPageState extends State<SettingsPage> {
               onPressed: () {
                 widget.prefs.setSyncConfig(
                   baseUrl: urlCtrl.text,
+                  lanUrl: lanCtrl.text,
                   token: tokenCtrl.text,
                   deviceName: deviceCtrl.text,
                   enabled: enabled,
+                  cache: syncCache,
                 );
                 Navigator.pop(ctx);
                 messenger.showSnackBar(

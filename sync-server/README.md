@@ -1,4 +1,4 @@
-# 嘤阅同步服务（Docker）
+﻿# 嘤阅同步服务（Docker）
 
 给嘤阅 App 用的私有同步后端：**进度/书签/统计即时同步 + 备份上传下载 + WebDAV 兼容**，
 自带一个 macOS / iOS 风格的网页面板（浅色深色自适应）。
@@ -53,3 +53,41 @@ DATA_DIR=./data PORT=8090 SYNC_TOKEN=test python3 server.py
 ```
 
 只需要 Python 3.8+，无第三方依赖。
+
+## 外网访问（朋友/自己不在同一个网络）
+
+两种方式，任选：
+
+1. **端口映射 + 域名/DDNS**：路由器把 8090 映射出去，App 里「外网地址」填 `http://你的域名:8090`
+   （建议再套一层 HTTPS，见下）。
+2. **反代自动 HTTPS（推荐）**：用同目录的 `docker-compose.external.yml`，它带一个 Caddy，
+   把 `SYNC_DOMAIN` 指向你的域名即可自动签证书：
+
+```bash
+SYNC_DOMAIN=sync.example.com docker compose -f docker-compose.external.yml up -d --build
+# 之后 App 外网地址填 https://sync.example.com
+```
+
+App 端可以同时填「外网地址 + 内网地址」：每次同步先探测，哪个通就用哪个，在家走内网、出门走外网。
+
+## 多人共用（朋友各用各的）
+
+```yaml
+environment:
+  - SYNC_TOKENS=me:tokenA,friend:tokenB
+```
+
+每个令牌对应独立数据目录 `data/users/<名字>/`（状态、备份、WebDAV、章节都隔离）。
+
+## 网页端直接看书 / 看漫画
+
+- App 设置里打开「同步正文 / 图片」后，读过的章节会把正文（或漫画图片地址）传到服务器；
+- 打开网页面板 →「书架」→ 点一本书 → 选章节，直接读；
+- 漫画图片由服务器下载并缓存（带 Referer），网页里直接显示，不受站点防盗链影响；
+- 网页里翻章会自动回写进度，App 下次启动拉取时会合并。
+
+接口：`POST /api/chapters`（`{path,index,title,text|images,referer}`）、
+`GET /api/chapters/list?path=`、`GET /api/chapters?path=&index=`。
+
+> 说明：网页端目前读的是「已经同步过的章节」。在线搜书 / 换源仍需要在 App 里做
+> （网页没有 WebView 书源引擎）。
