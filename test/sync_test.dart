@@ -1,4 +1,4 @@
-// 同步服务（0.52）：payload、按时间合并、HTTP 客户端、开关保护。
+﻿// 同步服务（0.52）：payload、按时间合并、HTTP 客户端、开关保护。
 import 'dart:convert';
 import 'dart:io';
 
@@ -11,6 +11,7 @@ import 'package:sakura_read/src/data/prefs.dart';
 import 'package:sakura_read/src/data/stats_store.dart';
 import 'package:sakura_read/src/data/sync_client.dart';
 import 'package:sakura_read/src/data/sync_service.dart';
+import 'package:sakura_read/src/source/source_store.dart';
 import 'package:sakura_read/src/platform/native_bridge.dart';
 
 Book _book(String path, {int chapter = 0, int lastReadAt = 0}) => Book(
@@ -241,5 +242,66 @@ void main() {
     expect(body?['path'], 'p/a');
     expect(body?['index'], 3);
     expect((body?['images'] as List), hasLength(1));
+  });
+  group('书源同步', () {
+    test('上传书源：POST /api/sources，带 items', () async {
+      Map<String, dynamic>? body;
+      final client = SyncClient(
+        baseUrl: 'http://srv:8090',
+        token: 't',
+        client: MockClient((req) async {
+          body = jsonDecode(req.body) as Map<String, dynamic>;
+          return http.Response('{"ok":true,"count":2}', 200);
+        }),
+      );
+      final n = await client.uploadSources([
+        {'bookSourceName': 'A', 'bookSourceUrl': 'https://a'},
+        {'bookSourceName': 'B', 'bookSourceUrl': 'https://b'},
+      ]);
+      expect(n, 2);
+      expect((body?['items'] as List), hasLength(2));
+    });
+
+    test('拉书源：本机为空时才会拉，且能解析', () async {
+      final sources = SourceStore(dirsOverride: dirs);
+      await sources.load();
+      addTearDown(sources.dispose);
+      prefs.setSyncConfig(
+        baseUrl: 'http://srv:8090',
+        token: 't',
+        enabled: true,
+      );
+      final sync = SyncService(
+        prefs: prefs,
+        store: store,
+        sources: sources,
+        client: SyncClient(
+          baseUrl: 'http://srv:8090',
+          token: 't',
+          client: MockClient((req) async {
+            return http.Response.bytes(
+              utf8.encode(
+                jsonEncode({
+                  'items': [
+                    {'bookSourceName': '源A', 'bookSourceUrl': 'https://a'},
+                  ],
+                }),
+              ),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }),
+        ),
+      );
+      addTearDown(sync.dispose);
+      final before = sources.sources.length;
+      final added = await sync.pullSources();
+      expect(added, greaterThanOrEqualTo(1));
+      expect(sources.sources.length, greaterThanOrEqualTo(before + 1));
+      expect(
+        sources.sources.any((s) => s.bookSourceUrl == 'https://a'),
+        isTrue,
+      );
+    });
   });
 }

@@ -211,3 +211,13 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.28); backdrop-filter: blur(4px); 
 .chapter-item:hover { color: var(--accent); }
 .reader-note { max-width: 760px; margin: 40px auto; color: var(--muted); text-align: center; }
 .reader .grow { flex: 1; min-width: 0; }
+/* 统计柱状图 / 搜索框 */
+.chart { display: flex; align-items: flex-end; gap: 6px; height: 140px; padding: 8px 2px; }
+.chart .bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; height: 100%; }
+.chart .bar i { display: block; width: 100%; border-radius: 6px 6px 2px 2px; background: linear-gradient(180deg, var(--accent), rgba(10,132,255,.35)); min-height: 3px; }
+.chart .bar span { font-size: 10px; color: var(--muted); }
+.search {
+  width: 100%; margin: 4px 0 10px; padding: 9px 12px;
+  border-radius: 10px; border: 1px solid var(--line);
+  background: var(--card); color: var(--text); font-size: 13px;
+}

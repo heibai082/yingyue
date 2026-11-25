@@ -1,4 +1,4 @@
-﻿// 跟「嘤阅同步服务」通信：状态推送/拉取、备份上传（0.52）。
+// 跟「嘤阅同步服务」通信：状态推送/拉取、备份上传（0.52）。
 //
 // 设计：
 //   - 只传「书架进度 + 书签 + 统计」，不传正文 / 缓存 / 书源规则；
@@ -239,6 +239,43 @@ class SyncClient {
         }
         final data = jsonDecode(utf8.decode(r.bodyBytes));
         return data is Map ? data['name']?.toString() : null;
+      });
+
+  /// 上传书源规则（只传规则，不传正文）。
+  Future<int> uploadSources(List<Map<String, dynamic>> sources) =>
+      _withFallback((base) async {
+        final r = await _client
+            .post(
+              _u(base, '/api/sources'),
+              headers: _headers,
+              body: jsonEncode({'items': sources}),
+            )
+            .timeout(const Duration(seconds: 60));
+        if (r.statusCode != 200) {
+          throw StateError('上传书源失败（HTTP ${r.statusCode}）');
+        }
+        final data = jsonDecode(utf8.decode(r.bodyBytes));
+        return data is Map
+            ? (data['count'] as num?)?.toInt() ?? sources.length
+            : sources.length;
+      });
+
+  /// 拉服务器上的书源（新设备第一次用）。
+  Future<List<Map<String, dynamic>>> fetchSources() =>
+      _withFallback((base) async {
+        final r = await _client
+            .get(_u(base, '/api/sources'), headers: _headers)
+            .timeout(const Duration(seconds: 30));
+        if (r.statusCode != 200) {
+          throw StateError('拉取书源失败（HTTP ${r.statusCode}）');
+        }
+        final data = jsonDecode(utf8.decode(r.bodyBytes));
+        final raw = data is Map ? data['items'] : data;
+        if (raw is! List) return <Map<String, dynamic>>[];
+        return [
+          for (final item in raw)
+            if (item is Map) Map<String, dynamic>.from(item),
+        ];
       });
 
   /// 上传一章：正文（小说）或图片地址（漫画，服务端会自己下载图片）。

@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 
 import 'book_store.dart';
 import 'prefs.dart';
+import '../source/models.dart';
+import '../source/source_store.dart';
 import 'stats_store.dart';
 import 'sync_client.dart';
 
@@ -14,6 +16,7 @@ class SyncService {
     required this.store,
     this.marks,
     this.stats,
+    this.sources,
     SyncClient? client,
     String platform = 'android',
   }) : _client = client,
@@ -28,6 +31,7 @@ class SyncService {
   final BookStore store;
   final BookmarkStore? marks;
   final StatsStore? stats;
+  final SourceStore? sources;
   final String _platform;
 
   SyncClient? _client;
@@ -125,11 +129,52 @@ class SyncService {
     }
   }
 
+  /// 把书源规则推到服务器（同步开启时才发）。
+  Future<int> pushSources() async {
+    final s = sources;
+    if (!enabled || s == null || s.sources.isEmpty) return 0;
+    try {
+      return await client.uploadSources([
+        for (final src in s.sources) src.toJson(),
+      ]);
+    } catch (e) {
+      debugPrint('[sync] upload sources failed: $e');
+      return 0;
+    }
+  }
+
+  /// 从服务器拉书源并**合并**（按 URL 去重，本地已有的保留）。
+  ///
+  /// 新设备第一次同步就能把书源带过来；老设备不会因此丢掉本地修改。
+  Future<int> pullSources() async {
+    final s = sources;
+    if (!enabled || s == null) return 0;
+    try {
+      final items = await client.fetchSources();
+      if (items.isEmpty) return 0;
+      final parsed = <BookSource>[];
+      for (final item in items) {
+        try {
+          parsed.add(BookSource.fromJson(item));
+        } catch (_) {}
+      }
+      if (parsed.isEmpty) return 0;
+      s.addAll(parsed);
+      await s.flush();
+      return parsed.length;
+    } catch (e) {
+      debugPrint('[sync] pull sources failed: $e');
+      return 0;
+    }
+  }
+
   /// 手动「立即同步」：先推后拉。
   Future<SyncResult> syncNow() async {
     final pushed = await push(silent: false);
     if (pushed.error != null) return pushed;
+    await pushSources();
     final pulled = await pull();
+    await pullSources();
     return SyncResult(
       pushed: true,
       pulled: pulled.pulled,

@@ -371,6 +371,7 @@ class Handler(BaseHTTPRequestHandler):
                 "updatedAt": st.get("updatedAt", 0),
                 "books": len(st.get("books", [])),
                 "bookmarks": len(st.get("bookmarks", [])),
+                "bookmarkItems": (st.get("bookmarks") or [])[:300],
                 "devices": st.get("devices", {}),
                 "recent": (st.get("books") or [])[:30],
                 "backups": list_backups(udir),
@@ -423,9 +424,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"items": []})
             with open(f, "r", encoding="utf-8") as fh:
                 try:
-                    return self._json(json.load(fh))
+                    data = json.load(fh)
                 except Exception:
                     return self._json({"items": []})
+            if isinstance(data, list):
+                return self._json({"items": data})
+            if isinstance(data, dict):
+                return self._json(data)
+            return self._json({"items": []})
         if path == "/api/settings":
             f = os.path.join(udir, "settings.json")
             if not os.path.isfile(f):
@@ -518,9 +524,11 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(self._body().decode("utf-8-sig"))
             except Exception:
                 return self._json({"error": "bad json"}, 400)
+            if isinstance(data, dict) and isinstance(data.get("items"), list):
+                data = data["items"]
             with open(os.path.join(udir, "sources.json"), "w", encoding="utf-8") as fh:
                 json.dump(data, fh, ensure_ascii=False)
-            return self._json({"ok": True})
+            return self._json({"ok": True, "count": len(data) if isinstance(data, list) else 0})
         if path == "/api/settings":
             try:
                 data = json.loads(self._body().decode("utf-8-sig"))

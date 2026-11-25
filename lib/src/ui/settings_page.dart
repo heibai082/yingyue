@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 
@@ -1320,6 +1320,7 @@ class _SettingsPageState extends State<SettingsPage> {
     store: widget.store,
     marks: BookmarkStore.shared,
     stats: widget.statsStore,
+    sources: widget.sourceStore,
     platform: Platform.operatingSystem,
   );
 

@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 
 import '../source/subscription_link.dart';
@@ -154,6 +154,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     store: widget.store,
     marks: BookmarkStore.shared,
     stats: widget.statsStore,
+    sources: widget.sourceStore,
     platform: Platform.operatingSystem,
   );
 

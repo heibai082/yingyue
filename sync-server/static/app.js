@@ -65,6 +65,8 @@ function render(d) {
   renderBackups(d.backups || []);
   renderDevices(d.devices || {});
   renderShelf(state.books || d.recent || []);
+  renderBookmarks(d.bookmarkItems || []);
+  renderStats(d.stats || {});
 }
 
 function renderBooks(sel, books) {
@@ -150,6 +152,12 @@ document.querySelectorAll('.nav').forEach((btn) => {
     if (btn.dataset.view === 'shelf') {
       try {
         renderShelf(await ensureBooks());
+      } catch (_) {}
+    }
+    if (btn.dataset.view === 'sources') loadSources();
+    if (btn.dataset.view === 'bookmarks') {
+      try {
+        await ensureBooks();
       } catch (_) {}
     }
   };
@@ -281,3 +289,105 @@ $('#reader-next').onclick = () => stepChapter(1);
 function showChapterListSafe() {
   if (reader.chapters.length) showChapterList();
 }
+/* ---------- 书签 / 统计 / 书源 ---------- */
+function bookTitleById(bookId) {
+  const b = (state.books || []).find((x) => x.id === bookId);
+  return b ? (b.title || b.path) : bookId;
+}
+
+function renderBookmarks(items) {
+  const box = $('#bookmark-list');
+  if (!box) return;
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">还没有书签（App 里加一条，同步后这里就有）</div>';
+    return;
+  }
+  box.innerHTML = items.map((m, i) => `<div class="row" data-mark="${i}">
+      <div class="grow">
+        <div class="name">${esc(m.chapterTitle || ('第 ' + ((m.chapterIndex || 0) + 1) + ' 章'))}</div>
+        <div class="sub">${esc(bookTitleById(m.bookId))} · 第 ${(m.chapterIndex || 0) + 1} 章 · ${fmtTime(m.createdAt)}</div>
+        ${m.excerpt ? `<div class="sub" style="margin-top:2px">「${esc(String(m.excerpt).slice(0, 80))}」</div>` : ''}
+      </div>
+      <span class="badge">跳转</span>
+    </div>`).join('');
+  box.querySelectorAll('[data-mark]').forEach((el) => {
+    el.onclick = () => jumpToBookmark(items[Number(el.dataset.mark)]);
+  });
+}
+
+async function jumpToBookmark(mark) {
+  const books = await ensureBooks();
+  const book = books.find((b) => b.id === mark.bookId);
+  if (!book) {
+    alert('这本书还没同步到服务器');
+    return;
+  }
+  await openBook(book);
+  await loadChapter(mark.chapterIndex || 0);
+}
+
+function renderStats(stats) {
+  const total = stats.totalSeconds || 0;
+  $('#st-total').textContent = total ? (total / 3600).toFixed(1) : '0';
+  const days = stats.days || {};
+  // 连续天数
+  const key = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  let streak = 0;
+  const today = new Date();
+  for (let i = 0; i < 3650; i++) {
+    const d = new Date(today.getTime() - i * 86400000);
+    const v = days[key(d)] || 0;
+    if (v > 0) streak++;
+    else if (i > 0) break;
+    else continue;
+  }
+  $('#st-streak').textContent = streak;
+  $('#st-finished').textContent = stats.finishedBooks || 0;
+
+  // 14 天柱状图
+  const box = $('#chart');
+  if (!box) return;
+  const vals = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(today.getTime() - i * 86400000);
+    vals.push({ label: `${d.getMonth() + 1}/${d.getDate()}`, minutes: Math.round((days[key(d)] || 0) / 60) });
+  }
+  const max = Math.max(1, ...vals.map((v) => v.minutes));
+  box.innerHTML = vals.map((v) => `<div class="bar" title="${v.minutes} 分钟">
+      <i style="height:${Math.max(2, Math.round((v.minutes / max) * 100))}%"></i>
+      <span>${v.label}</span>
+    </div>`).join('');
+}
+
+async function loadSources() {
+  const box = $('#source-list');
+  if (!box) return;
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const data = await api('/api/sources');
+    state.sources = data.items || [];
+  } catch (_) {
+    state.sources = [];
+  }
+  renderSources();
+}
+
+function renderSources() {
+  const box = $('#source-list');
+  const q = ($('#src-search')?.value || '').trim().toLowerCase();
+  let list = state.sources || [];
+  if (q) list = list.filter((s) => `${s.bookSourceName || ''} ${s.bookSourceUrl || ''}`.toLowerCase().includes(q));
+  if (!list.length) {
+    box.innerHTML = '<div class="empty">还没有书源（App 同步一次后这里就有）</div>';
+    return;
+  }
+  box.innerHTML = list.slice(0, 500).map((s) => `<div class="row">
+      <div class="grow">
+        <div class="name">${esc(s.bookSourceName || '未命名')}</div>
+        <div class="sub">${esc(s.bookSourceUrl || '')}</div>
+      </div>
+      <span class="badge ${s.enabled === false ? '' : 'done'}">${s.enabled === false ? '停用' : '启用'}</span>
+    </div>`).join('') + (list.length > 500 ? `<div class="empty">只显示前 500 个（共 ${list.length}）</div>` : '');
+}
+
+$('#src-search')?.addEventListener('input', renderSources);
