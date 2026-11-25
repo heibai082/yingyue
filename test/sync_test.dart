@@ -1,4 +1,4 @@
-// 同步服务（0.52）：payload、按时间合并、HTTP 客户端、开关保护。
+﻿// 同步服务（0.52）：payload、按时间合并、HTTP 客户端、开关保护。
 import 'dart:convert';
 import 'dart:io';
 
@@ -11,6 +11,7 @@ import 'package:sakura_read/src/data/prefs.dart';
 import 'package:sakura_read/src/data/stats_store.dart';
 import 'package:sakura_read/src/data/sync_client.dart';
 import 'package:sakura_read/src/data/sync_service.dart';
+import 'package:sakura_read/src/source/models.dart';
 import 'package:sakura_read/src/source/source_store.dart';
 import 'package:sakura_read/src/platform/native_bridge.dart';
 
@@ -390,6 +391,75 @@ void main() {
       expect(uploads, 1);
       expect(await sync.silentSync(force: true), 0);
       expect(uploads, 1);
+    });
+  });
+  group('网页加入书架 → App 导入', () {
+    test('pull 时把服务器有、本地没有的书建出来', () async {
+      final sources = SourceStore(dirsOverride: dirs);
+      await sources.load();
+      addTearDown(sources.dispose);
+      sources.addAll([
+        BookSource(bookSourceUrl: 'https://src', bookSourceName: '测试源'),
+      ]);
+
+      prefs.setSyncConfig(
+        baseUrl: 'http://srv:8090',
+        token: 't',
+        enabled: true,
+      );
+      final sync = SyncService(
+        prefs: prefs,
+        store: store,
+        sources: sources,
+        client: SyncClient(
+          baseUrl: 'http://srv:8090',
+          token: 't',
+          client: MockClient((req) async {
+            if (req.url.path == '/api/state') {
+              return http.Response.bytes(
+                utf8.encode(
+                  jsonEncode({
+                    'books': [
+                      {
+                        'path': 'https://book/x',
+                        'title': '网页加的书',
+                        'author': '作者',
+                        'chapterIndex': 0,
+                        'lastReadAt': 1,
+                      },
+                    ],
+                  }),
+                ),
+                200,
+                headers: {'content-type': 'application/json; charset=utf-8'},
+              );
+            }
+            if (req.url.path == '/api/books/meta') {
+              return http.Response.bytes(
+                utf8.encode(
+                  jsonEncode({
+                    'sourceUrl': 'https://src',
+                    'chapters': [
+                      {'title': '第1章', 'url': 'https://book/x/1'},
+                      {'title': '第2章', 'url': 'https://book/x/2'},
+                    ],
+                  }),
+                ),
+                200,
+                headers: {'content-type': 'application/json; charset=utf-8'},
+              );
+            }
+            return http.Response('{"ok":true}', 200);
+          }),
+        ),
+      );
+      addTearDown(sync.dispose);
+      final r = await sync.pull();
+      expect(r.ok, isTrue);
+      final book = store.books.where((b) => b.path == 'https://book/x');
+      expect(book, hasLength(1));
+      expect(book.first.chapters, hasLength(2));
+      expect(book.first.sourceUrl, 'https://src');
     });
   });
 }

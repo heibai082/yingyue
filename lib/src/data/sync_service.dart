@@ -119,6 +119,7 @@ class SyncService {
     try {
       final remote = await client.fetchState();
       _applyingRemote = true;
+      await importRemoteBooks(remote);
       final applied = applyRemoteState(
         remote,
         store: store,
@@ -133,6 +134,69 @@ class SyncService {
       _applyingRemote = false;
       _busy = false;
     }
+  }
+
+  /// 把服务器上「本地还没有」的书导入书架（网页「加入书架」用）。
+  ///
+  /// 需要服务器存了目录 meta、且本机有对应书源；一次最多导 [limit] 本。
+  Future<int> importRemoteBooks(
+    Map<String, dynamic> remote, {
+    int limit = 10,
+  }) async {
+    final s = sources;
+    final raw = remote['books'];
+    if (s == null || raw is! List) return 0;
+    final local = {for (final b in store.books) b.path};
+    var created = 0;
+    for (final item in raw) {
+      if (created >= limit) break;
+      if (item is! Map) continue;
+      final path = (item['path'] ?? '').toString();
+      if (path.isEmpty || local.contains(path)) continue;
+      Map<String, dynamic> meta;
+      try {
+        final m = await client.fetchBookMeta(path);
+        meta = {'sourceUrl': m.sourceUrl, 'chapters': m.chapters};
+      } catch (_) {
+        continue;
+      }
+      final chaptersRaw = meta['chapters'] as List? ?? const [];
+      if (chaptersRaw.isEmpty) continue;
+      BookSource? src;
+      for (final x in s.sources) {
+        if (x.bookSourceUrl == (meta['sourceUrl'] ?? '')) {
+          src = x;
+          break;
+        }
+      }
+      if (src == null) continue;
+      final chapters = <ChapterRef>[];
+      for (final c in chaptersRaw) {
+        if (c is! Map) continue;
+        final title = (c['title'] ?? '').toString();
+        final url = (c['url'] ?? '').toString();
+        if (title.isEmpty || url.isEmpty) continue;
+        chapters.add(ChapterRef(title: title, href: url));
+      }
+      if (chapters.isEmpty) continue;
+      final idx = (item['chapterIndex'] as num?)?.toInt() ?? 0;
+      store.addOnline(
+        Book(
+          id: path,
+          title: (item['title'] ?? path).toString(),
+          author: (item['author'] ?? '').toString(),
+          format: BookFormat.online,
+          path: path,
+          sourceUrl: (meta['sourceUrl'] ?? '').toString(),
+          chapters: chapters,
+          chapterIndex: idx.clamp(0, chapters.length - 1),
+          lastReadAt: (item['lastReadAt'] as num?)?.toInt() ?? 0,
+        ),
+      );
+      local.add(path);
+      created++;
+    }
+    return created;
   }
 
   /// 把书源规则推到服务器（同步开启时才发）。

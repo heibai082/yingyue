@@ -241,6 +241,29 @@ class SyncClient {
         return data is Map ? data['name']?.toString() : null;
       });
 
+  /// 读某本书的目录（网页「加入书架」时存在服务器上的 meta）。
+  Future<({String sourceUrl, List<Map<String, dynamic>> chapters})>
+  fetchBookMeta(String path) => _withFallback((base) async {
+    final r = await _client
+        .get(
+          _u(base, '/api/books/meta?path=${Uri.encodeQueryComponent(path)}'),
+          headers: _headers,
+        )
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode != 200) {
+      throw StateError('读取目录失败（HTTP ${r.statusCode}）');
+    }
+    final data = jsonDecode(utf8.decode(r.bodyBytes));
+    final map = data is Map ? data : <String, dynamic>{};
+    return (
+      sourceUrl: (map['sourceUrl'] ?? '').toString(),
+      chapters: [
+        for (final c in (map['chapters'] as List? ?? const []))
+          if (c is Map) Map<String, dynamic>.from(c),
+      ],
+    );
+  });
+
   /// 上传书源规则（只传规则，不传正文）。
   Future<int> uploadSources(List<Map<String, dynamic>> sources) =>
       _withFallback((base) async {
