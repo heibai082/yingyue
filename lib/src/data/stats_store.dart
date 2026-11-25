@@ -1,4 +1,4 @@
-﻿// 书签与阅读统计：本地 JSON 持久化。
+// 书签与阅读统计：本地 JSON 持久化。
 //
 // - 书签：书 + 章节序号 + 章内偏移 + 摘录（跳回原文定位）；
 // - 统计：总阅读时长、每日阅读时长、读完的书数（供记录页 / 统计页展示）。
@@ -303,6 +303,33 @@ class StatsStore extends ChangeNotifier with ReliablePersistence {
     if (seconds <= 0) return;
     _totalSeconds += seconds;
     _days[dateKey] = (_days[dateKey] ?? 0) + seconds;
+  }
+
+  /// 合并同步服务拉回来的统计：取大的，不改小（双设备不互相回退）。
+  void mergeRemote({
+    int? totalSeconds,
+    int? finishedBooks,
+    Map<String, int>? days,
+  }) {
+    var changed = false;
+    if (totalSeconds != null && totalSeconds > _totalSeconds) {
+      _totalSeconds = totalSeconds;
+      changed = true;
+    }
+    if (finishedBooks != null && finishedBooks > _finishedBooks) {
+      _finishedBooks = finishedBooks;
+      changed = true;
+    }
+    for (final e in (days ?? const <String, int>{}).entries) {
+      if (e.value > (_days[e.key] ?? 0)) {
+        _days[e.key] = e.value;
+        changed = true;
+      }
+    }
+    if (changed) {
+      _saveSoon();
+      notifyListeners();
+    }
   }
 
   void addFinishedBook() {

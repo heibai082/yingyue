@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>嘤阅同步</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="desktop">
+    <div class="window">
+      <header class="titlebar">
+        <div class="lights"><i class="red"></i><i class="yellow"></i><i class="green"></i></div>
+        <div class="title">嘤阅同步</div>
+        <div class="toolbar">
+          <span id="status" class="status">连接中…</span>
+          <button id="refresh" class="icon-btn" title="刷新">⟳</button>
+          <button id="token-btn" class="icon-btn" title="设置令牌">🔑</button>
+        </div>
+      </header>
+
+      <div class="body">
+        <aside class="sidebar">
+          <div class="side-group">
+            <div class="side-title">同步</div>
+            <button class="nav active" data-view="overview"><span>📚</span>概览</button>
+            <button class="nav" data-view="recent"><span>🕒</span>最近阅读</button>
+            <button class="nav" data-view="backups"><span>🗂️</span>备份</button>
+            <button class="nav" data-view="devices"><span>📱</span>设备</button>
+          </div>
+          <div class="side-foot">
+            <div class="hint">App 里填这个地址：</div>
+            <code id="server-url">—</code>
+          </div>
+        </aside>
+
+        <main class="content">
+          <section id="view-overview" class="view active">
+            <div class="cards">
+              <div class="card stat"><div class="label">书架</div><div class="value" id="stat-books">—</div><div class="unit">本</div></div>
+              <div class="card stat"><div class="label">书签</div><div class="value" id="stat-marks">—</div><div class="unit">条</div></div>
+              <div class="card stat"><div class="label">累计阅读</div><div class="value" id="stat-time">—</div><div class="unit">小时</div></div>
+              <div class="card stat"><div class="label">备份</div><div class="value" id="stat-backups">—</div><div class="unit">份</div></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h3>最近同步</h3><span id="updated-at" class="muted"></span></div>
+              <div id="latest-books" class="list"></div>
+            </div>
+          </section>
+
+          <section id="view-recent" class="view">
+            <div class="card">
+              <div class="card-head"><h3>最近阅读</h3><span class="muted">按最后阅读时间</span></div>
+              <div id="recent-list" class="list"></div>
+            </div>
+          </section>
+
+          <section id="view-backups" class="view">
+            <div class="card">
+              <div class="card-head"><h3>备份</h3><span class="muted">云端保留最近份数</span></div>
+              <div id="backup-list" class="list"></div>
+            </div>
+          </section>
+
+          <section id="view-devices" class="view">
+            <div class="card">
+              <div class="card-head"><h3>已连接的设备</h3><span class="muted">最近一次上报</span></div>
+              <div id="device-list" class="list"></div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <dialog id="token-dialog">
+    <form method="dialog" class="dialog-card">
+      <h3>访问令牌</h3>
+      <p class="muted">服务端启动时设置的 SYNC_TOKEN</p>
+      <input id="token-input" type="password" placeholder="输入令牌" autocomplete="off" />
+      <div class="dialog-actions">
+        <button value="cancel" class="ghost">取消</button>
+        <button value="ok" class="primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -14,6 +14,8 @@ import '../data/bookmark_export.dart';
 import '../data/crash_log.dart';
 import '../data/export_dirs.dart';
 import '../data/prefs.dart';
+import '../data/sync_client.dart';
+import '../data/sync_service.dart';
 import 'cache_space_page.dart';
 import 'download_center_page.dart';
 import '../data/tts_voice_catalog.dart';
@@ -1307,6 +1309,150 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  static String _shortTime(int ts) {
+    final d = DateTime.fromMillisecondsSinceEpoch(ts);
+    final p = (int n) => n.toString().padLeft(2, '0');
+    return '${p(d.month)}-${p(d.day)} ${p(d.hour)}:${p(d.minute)}';
+  }
+
+  SyncService _mkSync() => SyncService(
+    prefs: widget.prefs,
+    store: widget.store,
+    marks: BookmarkStore.shared,
+    stats: widget.statsStore,
+    platform: Platform.operatingSystem,
+  );
+
+  Future<void> _syncNow(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (!widget.prefs.syncEnabled || widget.prefs.syncBaseUrl.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('先在「同步服务器」里配置地址')));
+      return;
+    }
+    messenger.showSnackBar(const SnackBar(content: Text('正在同步…')));
+    final sync = _mkSync();
+    try {
+      final r = await sync.syncNow();
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(SnackBar(content: Text(r.summary)));
+    } finally {
+      sync.dispose();
+    }
+  }
+
+  /// 同步服务器配置弹窗：地址 / 令牌 / 设备名 / 开关，可先测连接。
+  Future<void> _showSyncServerDialog(BuildContext context) async {
+    final urlCtrl = TextEditingController(text: widget.prefs.syncBaseUrl);
+    final tokenCtrl = TextEditingController(text: widget.prefs.syncToken);
+    final deviceCtrl = TextEditingController(text: widget.prefs.syncDeviceName);
+    var enabled = widget.prefs.syncEnabled;
+    String? status;
+    var testing = false;
+    final messenger = ScaffoldMessenger.of(context);
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('同步服务器'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: urlCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '地址',
+                    hintText: 'http://192.168.1.10:8090',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: tokenCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '令牌',
+                    hintText: '服务端 SYNC_TOKEN',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: deviceCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '设备名（面板里显示）',
+                    hintText: '例如：小米11 / iPad',
+                  ),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: enabled,
+                  onChanged: (v) => setDialogState(() => enabled = v),
+                  title: const Text('启用同步', style: TextStyle(fontSize: 14)),
+                  subtitle: const Text(
+                    '改进度 / 加书签后 3 秒自动推送，启动时拉取最新',
+                    style: TextStyle(fontSize: 11.5),
+                  ),
+                ),
+                if (status != null)
+                  Text(
+                    status!,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: status!.startsWith('连接成功')
+                          ? Colors.green
+                          : Colors.redAccent,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: testing
+                  ? null
+                  : () async {
+                      setDialogState(() {
+                        testing = true;
+                        status = '正在测试…';
+                      });
+                      final client = SyncClient(
+                        baseUrl: urlCtrl.text,
+                        token: tokenCtrl.text,
+                      );
+                      final ok = await client.ping();
+                      client.close();
+                      setDialogState(() {
+                        testing = false;
+                        status = ok ? '连接成功' : '连不上（检查地址/端口/令牌）';
+                      });
+                    },
+              child: const Text('测试连接'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                widget.prefs.setSyncConfig(
+                  baseUrl: urlCtrl.text,
+                  token: tokenCtrl.text,
+                  deviceName: deviceCtrl.text,
+                  enabled: enabled,
+                );
+                Navigator.pop(ctx);
+                messenger.showSnackBar(
+                  const SnackBar(content: Text('已保存同步配置')),
+                );
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// 用户反馈：「后期考不考虑添加 WebDAV 或其他备份功能」「能把阅读的数据导进来吗」
   Widget _dataCard(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -1331,6 +1477,28 @@ class _SettingsPageState extends State<SettingsPage> {
                 builder: (_) => BackupPage(prefs: widget.prefs),
               ),
             ),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.sync_rounded),
+            title: const Text('同步服务器', style: TextStyle(fontSize: 14)),
+            subtitle: Text(
+              !widget.prefs.syncEnabled
+                  ? '未启用（需自建 Docker 同步服务）'
+                  : (widget.prefs.syncBaseUrl.isEmpty
+                        ? '启用但还没填地址'
+                        : '${widget.prefs.syncBaseUrl}'
+                              '${widget.prefs.lastSyncAt > 0 ? ' · 上次 ${_shortTime(widget.prefs.lastSyncAt)}' : ''}'),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12),
+            ),
+            trailing: IconButton(
+              tooltip: '立即同步',
+              icon: const Icon(Icons.sync_rounded, size: 20),
+              onPressed: () => _syncNow(context),
+            ),
+            onTap: () => _showSyncServerDialog(context),
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,

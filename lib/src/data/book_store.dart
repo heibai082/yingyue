@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -536,6 +536,32 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
     } catch (_) {}
     _saveSoon();
     notifyListeners();
+  }
+
+  /// 同步服务拉回来的进度：只有「远端更新」才覆盖本地（不冲掉新进度）。
+  ///
+  /// 返回 true 表示真的改了。
+  bool applyRemoteProgress(
+    String path, {
+    required int chapterIndex,
+    required int charOffset,
+    required bool finished,
+    required int lastReadAt,
+  }) {
+    for (final b in _books) {
+      if (b.path != path) continue;
+      if (lastReadAt <= b.lastReadAt) return false;
+      b.chapterIndex = b.chapters.isEmpty
+          ? 0
+          : chapterIndex.clamp(0, b.chapters.length - 1).toInt();
+      b.charOffset = charOffset < 0 ? 0 : charOffset;
+      b.finished = finished;
+      b.lastReadAt = lastReadAt;
+      _saveSoon();
+      notifyListeners();
+      return true;
+    }
+    return false;
   }
 
   /// 从书架移除一本书。

@@ -1,0 +1,19 @@
+services:
+  yingyue-sync:
+    build: .
+    image: yingyue-sync:1.0
+    container_name: yingyue-sync
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      - SYNC_TOKEN=change-me            # 改成你自己的令牌（App 里要填一样的）
+      - BACKUP_KEEP=14                  # 云端保留最近多少份备份
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

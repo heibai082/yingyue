@@ -108,6 +108,13 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   double comicBrightness = 1.0;
   double comicWarmth = 0.0;
 
+  /// 同步服务器（嘤阅同步服务的地址 / 令牌 / 开关）。
+  String syncBaseUrl = '';
+  String syncToken = '';
+  bool syncEnabled = false;
+  int lastSyncAt = 0;
+  String syncDeviceName = '';
+
   /// 每天首次启动自动把备份传到 WebDAV（默认关闭）。
   bool autoBackupEnabled = false;
 
@@ -431,6 +438,11 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           cacheLimitMB = (data['cacheLimitMB'] as num?)?.toInt() ?? 2048;
           dailyGoalMinutes = (data['dailyGoalMinutes'] as num?)?.toInt() ?? 0;
           autoBackupEnabled = data['autoBackupEnabled'] as bool? ?? false;
+          syncBaseUrl = data['syncBaseUrl'] as String? ?? '';
+          syncToken = data['syncToken'] as String? ?? '';
+          syncEnabled = data['syncEnabled'] as bool? ?? false;
+          lastSyncAt = (data['lastSyncAt'] as num?)?.toInt() ?? 0;
+          syncDeviceName = data['syncDeviceName'] as String? ?? '';
           lastAutoBackupDay = data['lastAutoBackupDay'] as String? ?? '';
           comicPageMode = data['comicPageMode'] as String? ?? 'scroll';
           comicRightToLeft = data['comicRightToLeft'] as bool? ?? false;
@@ -661,6 +673,26 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
 
   void setComicWarmth(double v) {
     comicWarmth = v.clamp(-1.0, 1.0);
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setSyncConfig({
+    String? baseUrl,
+    String? token,
+    String? deviceName,
+    bool? enabled,
+  }) {
+    if (baseUrl != null) syncBaseUrl = baseUrl.trim();
+    if (token != null) syncToken = token.trim();
+    if (deviceName != null) syncDeviceName = deviceName.trim();
+    if (enabled != null) syncEnabled = enabled;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setLastSyncAt(int ts) {
+    lastSyncAt = ts;
     _saveSoon();
     notifyListeners();
   }
@@ -1128,6 +1160,11 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
         'cacheLimitMB': cacheLimitMB,
         'dailyGoalMinutes': dailyGoalMinutes,
         'autoBackupEnabled': autoBackupEnabled,
+        'syncBaseUrl': syncBaseUrl,
+        'syncToken': syncToken,
+        'syncEnabled': syncEnabled,
+        'lastSyncAt': lastSyncAt,
+        'syncDeviceName': syncDeviceName,
         'lastAutoBackupDay': lastAutoBackupDay,
         'comicPageMode': comicPageMode,
         'comicRightToLeft': comicRightToLeft,

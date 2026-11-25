@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:io';
 
 import '../source/subscription_link.dart';
@@ -14,6 +14,7 @@ import '../data/book_store.dart';
 import '../data/auto_backup.dart';
 import '../data/crash_log.dart';
 import '../data/download_center.dart';
+import '../data/sync_service.dart';
 import '../data/cache_tracker.dart';
 import '../data/app_activity.dart' show kReaderActive;
 import '../data/pet_guide.dart';
@@ -75,6 +76,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     DownloadCenter.instance.bind(widget.store);
     // 崩溃日志落盘（设置里可导出）
     CrashLog.install(File('${widget.store.appDirs.files}/logs/crash.log'));
+    // 同步服务器：变化推送 + 启动拉取（0.52）
+    _sync.start();
+    unawaited(_pullOnStartup());
     // 队列进度同步到通知栏（Android；失败静默，不影响下载）
     DownloadCenter.instance.onProgress = (task, fraction) {
       if (task == null) {
@@ -143,6 +147,26 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   // ==================== 每天首次：书源同步 + 体检 ====================
 
+  // ==================== 同步服务器 ====================
+
+  late final SyncService _sync = SyncService(
+    prefs: widget.prefs,
+    store: widget.store,
+    marks: BookmarkStore.shared,
+    stats: widget.statsStore,
+    platform: Platform.operatingSystem,
+  );
+
+  /// 启动时拉一次最新进度；有变化就提示一句。
+  Future<void> _pullOnStartup() async {
+    final result = await _sync.pullOnStartup();
+    if (result == null || !mounted) return;
+    if (!result.ok) return;
+    if (result.books > 0 || result.bookmarks > 0) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('已从同步服务器拉取：${result.summary}')));
+    }
+  }
   // ==================== WebDAV 自动备份 ====================
 
   Timer? _autoBackupTimer;
@@ -151,6 +175,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void _scheduleAutoBackup() {
     if (Platform.environment['FLUTTER_TEST'] == 'true') return;
     _autoBackupTimer?.cancel();
+    _sync.dispose();
     _autoBackupTimer = Timer(const Duration(seconds: 20), () async {
       if (!mounted) return;
       final service = AutoBackupService(prefs: widget.prefs);
@@ -177,6 +202,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (Platform.environment['FLUTTER_TEST'] == 'true') return;
     _cacheTrackTimer?.cancel();
     _autoBackupTimer?.cancel();
+    _sync.dispose();
     _cacheTrackTimer = Timer(const Duration(seconds: 15), () {
       unawaited(_runCacheTrack());
     });
@@ -397,6 +423,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _sourceSyncTimer?.cancel();
     _cacheTrackTimer?.cancel();
     _autoBackupTimer?.cancel();
+    _sync.dispose();
     _cacheTracker.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();

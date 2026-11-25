@@ -1,0 +1,225 @@
+// 同步服务（0.52）：payload、按时间合并、HTTP 客户端、开关保护。
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:sakura_read/src/data/book_store.dart';
+import 'package:sakura_read/src/data/models.dart';
+import 'package:sakura_read/src/data/prefs.dart';
+import 'package:sakura_read/src/data/stats_store.dart';
+import 'package:sakura_read/src/data/sync_client.dart';
+import 'package:sakura_read/src/data/sync_service.dart';
+import 'package:sakura_read/src/platform/native_bridge.dart';
+
+Book _book(String path, {int chapter = 0, int lastReadAt = 0}) => Book(
+  id: path,
+  title: '书$path',
+  format: BookFormat.online,
+  path: path,
+  chapters: [
+    for (var i = 0; i < 10; i++) ChapterRef(title: '第 ${i + 1} 章', href: 'h$i'),
+  ],
+  chapterIndex: chapter,
+  lastReadAt: lastReadAt,
+);
+
+void main() {
+  late Directory tmp;
+  late AppDirs dirs;
+  late BookStore store;
+  late AppPrefs prefs;
+
+  setUp(() async {
+    tmp = await Directory.systemTemp.createTemp('sakura_sync');
+    dirs = AppDirs(files: '${tmp.path}/files', cache: '${tmp.path}/cache');
+    store = BookStore(dirsOverride: dirs);
+    await store.load();
+    prefs = AppPrefs(dirsOverride: dirs);
+    await prefs.load();
+  });
+
+  tearDown(() async {
+    store.dispose();
+    prefs.dispose();
+    try {
+      await tmp.delete(recursive: true);
+    } catch (_) {}
+  });
+
+  group('payload', () {
+    test('带设备、书架进度、统计，不传正文', () {
+      store.addOnline(_book('p/a', chapter: 3, lastReadAt: 100));
+      final payload = buildSyncPayload(
+        store: store,
+        deviceName: '小米11',
+        platform: 'android',
+      );
+      expect(payload['devices']['小米11']['platform'], 'android');
+      final books = payload['books'] as List;
+      expect(books, hasLength(1));
+      expect(books.first['chapterIndex'], 3);
+      expect(books.first['total'], 10);
+      expect(books.first.containsKey('content'), isFalse);
+      expect(payload['stats'], isA<Map>());
+    });
+  });
+
+  group('合并远端状态', () {
+    test('远端更新才覆盖；更旧的忽略', () {
+      store.addOnline(_book('p/a', chapter: 1, lastReadAt: 100));
+      final applied = applyRemoteState({
+        'books': [
+          {'path': 'p/a', 'chapterIndex': 5, 'lastReadAt': 200},
+        ],
+      }, store: store);
+      expect(applied[0], 1);
+      expect(store.byId('p/a')!.chapterIndex, 5);
+
+      final again = applyRemoteState({
+        'books': [
+          {'path': 'p/a', 'chapterIndex': 2, 'lastReadAt': 150},
+        ],
+      }, store: store);
+      expect(again[0], 0);
+      expect(store.byId('p/a')!.chapterIndex, 5, reason: '旧进度不能回退');
+    });
+
+    test('统计取大，不取小', () async {
+      final stats = StatsStore(dirsOverride: dirs);
+      await stats.load();
+      addTearDown(stats.dispose);
+      applyRemoteState(
+        {
+          'stats': {
+            'totalSeconds': 1000,
+            'finishedBooks': 2,
+            'days': {'2026-11-25': 600},
+          },
+        },
+        store: store,
+        stats: stats,
+      );
+      expect(stats.totalSeconds, 1000);
+      expect(stats.finishedBooks, 2);
+      expect(stats.days['2026-11-25'], 600);
+
+      // 远端更小 → 不回退
+      applyRemoteState(
+        {
+          'stats': {'totalSeconds': 10, 'finishedBooks': 0, 'days': {}},
+        },
+        store: store,
+        stats: stats,
+      );
+      expect(stats.totalSeconds, 1000);
+      expect(stats.finishedBooks, 2);
+    });
+  });
+
+  group('HTTP 客户端', () {
+    test('推送带 Bearer 令牌和 JSON', () async {
+      String? auth;
+      Map<String, dynamic>? body;
+      final client = SyncClient(
+        baseUrl: 'http://srv:8090',
+        token: 't0',
+        client: MockClient((req) async {
+          auth = req.headers['Authorization'];
+          body = jsonDecode(req.body) as Map<String, dynamic>;
+          return http.Response('{"ok":true}', 200);
+        }),
+      );
+      await client.pushState({'books': []});
+      expect(auth, 'Bearer t0');
+      expect(body?['books'], isEmpty);
+    });
+
+    test('健康检查：200=true，其他=false，异常=false', () async {
+      var code = 200;
+      final client = SyncClient(
+        baseUrl: 'http://srv:8090',
+        token: 't',
+        client: MockClient((req) async {
+          if (code == -1) throw const SocketException('boom');
+          return http.Response('{}', code);
+        }),
+      );
+      expect(await client.ping(), isTrue);
+      code = 500;
+      expect(await client.ping(), isFalse);
+      code = -1;
+      expect(await client.ping(), isFalse);
+    });
+
+    test('拉取解析 JSON；非 200 抛错', () async {
+      var code = 200;
+      final client = SyncClient(
+        baseUrl: 'http://srv:8090',
+        token: 't',
+        client: MockClient((req) async {
+          return http.Response(
+            jsonEncode({
+              'books': [
+                {'path': 'p/a', 'lastReadAt': 1},
+              ],
+            }),
+            code,
+          );
+        }),
+      );
+      final state = await client.fetchState();
+      expect((state['books'] as List), hasLength(1));
+      code = 401;
+      await expectLater(client.fetchState(), throwsStateError);
+    });
+
+    test('上传备份返回文件名', () async {
+      final client = SyncClient(
+        baseUrl: 'http://srv:8090',
+        token: 't',
+        client: MockClient((req) async {
+          expect(req.headers['Content-Type'], 'application/zip');
+          return http.Response('{"ok":true,"name":"b.zip"}', 200);
+        }),
+      );
+      expect(await client.uploadBackup([1, 2, 3]), 'b.zip');
+    });
+  });
+
+  group('SyncService', () {
+    test('未启用时直接返回「未启用」', () async {
+      final sync = SyncService(prefs: prefs, store: store);
+      addTearDown(sync.dispose);
+      final r = await sync.push();
+      expect(r.ok, isFalse);
+      expect(r.error, contains('未启用'));
+    });
+
+    test('启用后 syncNow 推送成功并记录时间', () async {
+      prefs.setSyncConfig(
+        baseUrl: 'http://srv:8090',
+        token: 't',
+        enabled: true,
+      );
+      final sync = SyncService(
+        prefs: prefs,
+        store: store,
+        client: SyncClient(
+          baseUrl: 'http://srv:8090',
+          token: 't',
+          client: MockClient((req) async {
+            if (req.method == 'POST') return http.Response('{"ok":true}', 200);
+            return http.Response('{"books":[]}', 200);
+          }),
+        ),
+      );
+      addTearDown(sync.dispose);
+      final r = await sync.syncNow();
+      expect(r.ok, isTrue);
+      expect(r.pushed, isTrue);
+      expect(prefs.lastSyncAt, greaterThan(0));
+    });
+  });
+}
