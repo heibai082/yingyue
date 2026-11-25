@@ -629,7 +629,10 @@ class _SettingsPageState extends State<SettingsPage> {
             trailing: const Icon(Icons.chevron_right_rounded),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(
-                builder: (_) => StatsPage(statsStore: widget.statsStore),
+                builder: (_) => StatsPage(
+                  statsStore: widget.statsStore,
+                  prefs: widget.prefs,
+                ),
               ),
             ),
           ),

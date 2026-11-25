@@ -1,4 +1,4 @@
-// 樱读 README 截图生成器（**人工执行**，不进常规测试集）。
+﻿// 樱读 README 截图生成器（**人工执行**，不进常规测试集）。
 //
 // 原理：用 Flutter 测试环境的离屏渲染能力，把**真实界面**渲染成 PNG，
 // 不需要启动手机 App（不干扰用户）。
@@ -820,7 +820,7 @@ void main() {
         MaterialApp(
           debugShowCheckedModeBanner: false,
           theme: SakuraTheme.build(ctx.prefs.accent, Brightness.light),
-          home: StatsPage(statsStore: ctx.stats),
+          home: StatsPage(statsStore: ctx.stats, prefs: ctx.prefs),
         ),
       ),
     );

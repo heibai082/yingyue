@@ -128,6 +128,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   /// 是否处于朗读模式（显示控制条）。
   bool _ttsActive = false;
 
+  /// 朗读定时停止（时间点 + 分钟数，用于界面显示）。
+  DateTime? _ttsSleepAt;
+  int _ttsSleepMinutes = 0;
+  Timer? _ttsSleepTimer;
+
   /// 本章插图目录（EPUB 有插图时非空；正文里的图片标记从这里加载）。
   String? _imageDir;
 
@@ -1163,6 +1168,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   onToggle: _toggleTts,
                   onStop: _stopTts,
                   onOpenSettings: _showTtsSettings,
+                  onSleepTimer: _showTtsSleepSheet,
+                  sleepAt: _ttsSleepAt,
                 ),
               ),
             ),
@@ -2220,11 +2227,72 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
   }
 
+  /// 朗读定时停止：15 / 30 / 60 分钟或关闭。
+  Future<void> _showTtsSleepSheet() async {
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 2, 20, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '定时停止朗读',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+            for (final m in const [0, 15, 30, 60])
+              ListTile(
+                dense: true,
+                title: Text(m == 0 ? '关闭定时' : '$m 分钟后停止'),
+                trailing: _ttsSleepAt != null && m == _ttsSleepMinutes
+                    ? const Icon(Icons.check_rounded, size: 18)
+                    : null,
+                onTap: () => Navigator.pop(ctx, m),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    _ttsSleepTimer?.cancel();
+    if (picked == 0) {
+      setState(() {
+        _ttsSleepAt = null;
+        _ttsSleepMinutes = 0;
+      });
+      return;
+    }
+    final at = DateTime.now().add(Duration(minutes: picked));
+    setState(() {
+      _ttsSleepAt = at;
+      _ttsSleepMinutes = picked;
+    });
+    _ttsSleepTimer = Timer(Duration(minutes: picked), () async {
+      if (!mounted) return;
+      await _stopTts();
+      if (!mounted) return;
+      _toastLate('定时到啦，朗读已停止 🌙');
+    });
+  }
+
   Future<void> _stopTts() async {
+    _ttsSleepTimer?.cancel();
     await _tts.stop();
     _tts.onParagraph = null;
     _tts.onFinished = null;
-    if (mounted) setState(() => _ttsActive = false);
+    if (mounted) {
+      setState(() {
+        _ttsActive = false;
+        _ttsSleepAt = null;
+        _ttsSleepMinutes = 0;
+      });
+    }
   }
 
   Future<void> _ttsPrev() async {

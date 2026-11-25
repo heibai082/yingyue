@@ -1,6 +1,14 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../../platform/tts_service.dart';
+
+/// 剩余时间的口语化文案。
+String _left(DateTime at) {
+  final d = at.difference(DateTime.now());
+  if (d.isNegative) return '即将停止';
+  final m = d.inMinutes;
+  return m <= 0 ? '<1 分钟' : '$m 分钟';
+}
 
 /// 朗读控制条：悬浮在阅读页底部，显示进度并控制播放。
 class TtsBar extends StatelessWidget {
@@ -12,6 +20,8 @@ class TtsBar extends StatelessWidget {
     required this.onToggle,
     required this.onStop,
     required this.onOpenSettings,
+    this.onSleepTimer,
+    this.sleepAt,
     this.dark = true,
   });
 
@@ -21,6 +31,12 @@ class TtsBar extends StatelessWidget {
   final VoidCallback onToggle;
   final VoidCallback onStop;
   final VoidCallback onOpenSettings;
+
+  /// 定时停止（null = 不显示入口）。
+  final VoidCallback? onSleepTimer;
+
+  /// 定时停止的时间点（用于倒计时显示）。
+  final DateTime? sleepAt;
 
   /// 深色底（阅读器默认）还是浅色底。
   final bool dark;
@@ -116,6 +132,15 @@ class TtsBar extends StatelessWidget {
                 tooltip: '下一段',
                 onTap: onNext,
               ),
+              if (onSleepTimer != null)
+                _btn(
+                  icon: sleepAt == null
+                      ? Icons.bedtime_outlined
+                      : Icons.bedtime_rounded,
+                  fg: sleepAt == null ? fgDim : fg,
+                  tooltip: sleepAt == null ? '定时停止' : '定时停止：${_left(sleepAt!)}',
+                  onTap: onSleepTimer!,
+                ),
               _btn(
                 icon: Icons.tune_rounded,
                 fg: fg,

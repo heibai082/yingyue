@@ -1,4 +1,4 @@
-﻿// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
+// 漫画阅读页：纵向连续滚动看一话，可切上一话 / 下一话 / 目录。
 //
 // 设计取舍：
 //   - 不做分页手势（左右滑），先做「一条长图往下滚」，和站点本身一致，
@@ -17,6 +17,7 @@ import '../../data/models.dart';
 import '../../data/prefs.dart';
 import '../../source/analyze_url.dart';
 import '../../source/models.dart';
+import '../../data/comic_view.dart';
 import '../../source/ad_page_filter.dart';
 import '../../source/chapter_order.dart';
 import '../../source/comic_chapter_cache.dart';
@@ -366,6 +367,17 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: _toggleChrome,
+              // 上下滑 = 亮度；左右滑 = 色温（翻页模式下左右留给 PageView）
+              onVerticalDragUpdate: (d) {
+                final p = widget.prefs;
+                p.setComicBrightness(p.comicBrightness - d.delta.dy / 400);
+              },
+              onHorizontalDragUpdate: widget.prefs.comicPageMode == 'paged'
+                  ? null
+                  : (d) {
+                      final p = widget.prefs;
+                      p.setComicWarmth(p.comicWarmth + d.delta.dx / 400);
+                    },
               child: _buildBody(),
             ),
           ),
@@ -446,6 +458,12 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
                 ),
               ),
               IconButton(
+                tooltip: '阅读设置',
+                onPressed: _showComicSettings,
+                icon: const Icon(Icons.tune_rounded),
+                color: Colors.white,
+              ),
+              IconButton(
                 tooltip: '目录',
                 onPressed: _openToc,
                 icon: const Icon(Icons.list_rounded),
@@ -486,20 +504,206 @@ class _ComicReaderPageState extends State<ComicReaderPage> {
       );
     }
     final href = _hrefOf(_chapterIndex);
-    return ListView.builder(
-      controller: _scroll,
-      itemCount: _images.length,
-      itemBuilder: (context, i) => Padding(
-        padding: const EdgeInsets.only(bottom: 2),
-        // 缓存过的章节：图片直接从磁盘出（不转圈）；没缓存才走网络 + 顺手落盘
-        // 加载失败时图内自带「重试」按钮；长按整张图也能重试
-        child: ComicImage(
-          store: widget.store,
-          bookId: widget.bookId,
-          href: href,
-          index: i,
-          url: _images[i],
+    final prefs = widget.prefs;
+    final size = MediaQuery.sizeOf(context);
+    final paged = prefs.comicPageMode == 'paged';
+
+    Widget imageAt(int index) => GestureDetector(
+      onDoubleTap: () => _openZoom(_images[index]),
+      child: ComicImage(
+        store: widget.store,
+        bookId: widget.bookId,
+        href: href,
+        index: index,
+        url: _images[index],
+        fit: paged ? BoxFit.contain : BoxFit.fitWidth,
+      ),
+    );
+
+    Widget content;
+    if (paged) {
+      final doublePage = shouldUseDoublePage(
+        landscape: size.width > size.height,
+        width: size.width,
+      );
+      final pages = paginateImages(_images, doublePage: doublePage);
+      content = PageView.builder(
+        reverse: reversePages(rightToLeft: prefs.comicRightToLeft),
+        itemCount: pages.length,
+        itemBuilder: (context, p) {
+          final urls = pages[p];
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final url in urls)
+                Expanded(child: imageAt(_images.indexOf(url))),
+            ],
+          );
+        },
+      );
+    } else {
+      content = ListView.builder(
+        controller: _scroll,
+        itemCount: _images.length,
+        itemBuilder: (context, i) => Padding(
+          padding: const EdgeInsets.only(bottom: 2),
+          child: imageAt(i),
         ),
+      );
+    }
+
+    // 亮度（黑遮罩）+ 色温（暖/冷薄色）叠在画面上，手势实时调
+    final dim = dimAlphaFor(prefs.comicBrightness);
+    final warmth = prefs.comicWarmth;
+    return Stack(
+      children: [
+        Positioned.fill(child: content),
+        if (dim > 0.001)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: ColoredBox(color: Colors.black.withValues(alpha: dim)),
+            ),
+          ),
+        if (warmth.abs() > 0.001)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: ColoredBox(
+                color: (warmth > 0 ? Colors.orange : Colors.blue).withValues(
+                  alpha: warmthAlphaFor(warmth),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// 双击放大看细节（全屏，可拖动/缩放，点一下退出）。
+  void _openZoom(String url) {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black,
+      builder: (ctx) => GestureDetector(
+        onTap: () => Navigator.pop(ctx),
+        child: InteractiveViewer(
+          maxScale: 5,
+          child: Center(child: _zoomImage(url)),
+        ),
+      ),
+    );
+  }
+
+  /// 放大时用的图：有缓存读本地，没有就走网络。
+  Widget _zoomImage(String url) {
+    final href = _hrefOf(_chapterIndex);
+    final file = comicImageCacheFile(
+      widget.store,
+      widget.bookId,
+      href,
+      _images.indexOf(url),
+      url,
+    );
+    try {
+      if (file.existsSync() && file.lengthSync() > 0) {
+        return Image.file(file, fit: BoxFit.contain);
+      }
+    } catch (_) {}
+    return Image.network(
+      url,
+      fit: BoxFit.contain,
+      headers: {'Referer': href},
+      errorBuilder: (ctx, e, st) => const Padding(
+        padding: EdgeInsets.all(24),
+        child: Text('这张图加载失败', style: TextStyle(color: Colors.white70)),
+      ),
+    );
+  }
+
+  /// 漫画阅读设置：翻页模式 / 阅读方向 / 亮度 / 色温。
+  void _showComicSettings() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => AnimatedBuilder(
+        animation: widget.prefs,
+        builder: (ctx, _) {
+          final p = widget.prefs;
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '漫画阅读',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text('翻页方式', style: TextStyle(fontSize: 12.5)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('纵向滚动'),
+                        selected: p.comicPageMode == 'scroll',
+                        onSelected: (_) => p.setComicPageMode('scroll'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('一页一屏（可双页）'),
+                        selected: p.comicPageMode == 'paged',
+                        onSelected: (_) => p.setComicPageMode('paged'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: p.comicRightToLeft,
+                    onChanged: p.setComicRightToLeft,
+                    title: const Text('从右往左读', style: TextStyle(fontSize: 14)),
+                    subtitle: const Text(
+                      '日漫习惯：翻页方向反过来',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '亮度 ${(p.comicBrightness * 100).round()}%',
+                    style: const TextStyle(fontSize: 12.5),
+                  ),
+                  Slider(
+                    value: p.comicBrightness,
+                    min: 0.3,
+                    max: 1,
+                    onChanged: p.setComicBrightness,
+                  ),
+                  Text(
+                    '色温 ${p.comicWarmth >= 0 ? '偏暖' : '偏冷'} '
+                    '${(p.comicWarmth.abs() * 100).round()}%',
+                    style: const TextStyle(fontSize: 12.5),
+                  ),
+                  Slider(
+                    value: p.comicWarmth,
+                    min: -1,
+                    max: 1,
+                    onChanged: p.setComicWarmth,
+                  ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: () {
+                        p.setComicBrightness(1);
+                        p.setComicWarmth(0);
+                      },
+                      child: const Text('恢复默认'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }

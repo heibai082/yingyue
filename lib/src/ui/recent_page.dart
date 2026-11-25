@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../data/book_store.dart';
 import '../data/models.dart';
@@ -87,7 +87,8 @@ class RecentPage extends StatelessWidget {
                 tooltip: '阅读记录',
                 onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => StatsPage(statsStore: statsStore),
+                    builder: (_) =>
+                        StatsPage(statsStore: statsStore, prefs: prefs),
                   ),
                 ),
                 icon: const Icon(Icons.insights_rounded, size: 20),

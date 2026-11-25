@@ -1,4 +1,4 @@
-import 'ai_settings_page.dart';
+﻿import 'ai_settings_page.dart';
 
 import 'package:flutter/material.dart';
 
@@ -103,7 +103,7 @@ class ReadingAssistantHome extends StatelessWidget {
                 '查看真实的阅读记录与趋势',
                 () => Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => StatsPage(statsStore: stats!),
+                    builder: (_) => StatsPage(statsStore: stats!, prefs: prefs),
                   ),
                 ),
               ),

@@ -176,7 +176,7 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
       if (await marker.exists()) return;
     } catch (_) {}
     await _migrateAll();
-    await buildMissingManifests();
+    await _buildManifestsOnce();
     try {
       await marker.writeAsString(DateTime.now().toIso8601String());
     } catch (_) {}
@@ -211,12 +211,9 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
   ///
   /// 没有清单就没法判断「这一话到底齐不齐」，也复用不了换 URL 后的旧图；
   /// 这里按缓存里的图片清单（`comic_list_cache.json`）把顺序补出来。
+  /// 显式调用（测试 / 手动修复）：不看 marker，直接补。
   Future<void> buildMissingManifests() async {
     if (_disposed) return;
-    final marker = File('${_dirsOrTemp.files}/.comic_manifest_v1');
-    try {
-      if (await marker.exists()) return;
-    } catch (_) {}
     final dirs = _dirsOrTemp;
     for (final book in List<Book>.of(_books)) {
       if (book.format != BookFormat.online) continue;
@@ -251,6 +248,15 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
         debugPrint('[cache] 补漫画清单失败：$e');
       }
     }
+  }
+
+  /// 启动时只补一次（marker 控制）。
+  Future<void> _buildManifestsOnce() async {
+    final marker = File('${_dirsOrTemp.files}/.comic_manifest_v1');
+    try {
+      if (await marker.exists()) return;
+    } catch (_) {}
+    await buildMissingManifests();
     try {
       await marker.writeAsString(DateTime.now().toIso8601String());
     } catch (_) {}

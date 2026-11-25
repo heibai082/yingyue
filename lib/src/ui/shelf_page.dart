@@ -15,6 +15,7 @@ import '../data/import_research.dart';
 import 'widgets/failed_books_sheet.dart';
 import '../data/file_scan.dart';
 import '../data/models.dart';
+import '../data/shelf_filter.dart';
 import '../data/pet_guide.dart';
 import '../data/prefs.dart';
 import '../data/shelf_sort.dart';
@@ -61,6 +62,11 @@ class _ShelfPageState extends State<ShelfPage> {
 
   /// 当前分组筛选：null = 全部，'' = 未分组，其余为分组名。
   String? _groupFilter;
+
+  /// 书架内搜索（书名 / 作者）。
+  String _query = '';
+  bool _showSearch = false;
+  ShelfStatusFilter _statusFilter = ShelfStatusFilter.all;
   bool _failLoaded = false;
 
   /// 空书架的看板娘台词。
@@ -116,9 +122,14 @@ class _ShelfPageState extends State<ShelfPage> {
       builder: (context, _) {
         final allBooks = widget.store.books.toList();
         _sortBooks(allBooks);
-        final books = _groupFilter == null
+        final inGroup = _groupFilter == null
             ? allBooks
             : allBooks.where((b) => b.group == _groupFilter).toList();
+        final books = filterShelf(
+          inGroup,
+          query: _query,
+          status: _statusFilter,
+        );
         return Scaffold(
           // 底栏用 extendBody 盖在正文上，Scaffold 感知不到它的高度：
           // 默认 endFloat 会把「＋」摆进底栏区域，正好压住最右侧的「设置」，
@@ -141,6 +152,7 @@ class _ShelfPageState extends State<ShelfPage> {
             slivers: [
               _buildHeader(context, books.length),
               _buildFailedSliver(context),
+              if (_showSearch) _buildSearchBar(),
               _buildGroupBar(allBooks),
               if (books.isEmpty)
                 SliverFillRemaining(
@@ -530,6 +542,14 @@ class _ShelfPageState extends State<ShelfPage> {
                   ),
                 ),
                 IconButton(
+                  onPressed: () => setState(() => _showSearch = !_showSearch),
+                  icon: const Icon(
+                    Icons.filter_list_rounded,
+                    color: Colors.white,
+                  ),
+                  tooltip: '书架内搜索 / 筛选',
+                ),
+                IconButton(
                   onPressed: _showArrangeSheet,
                   icon: const Icon(Icons.tune_rounded, color: Colors.white),
                   tooltip: '排列方式',
@@ -539,6 +559,53 @@ class _ShelfPageState extends State<ShelfPage> {
                   icon: const Icon(Icons.image_outlined, color: Colors.white),
                   tooltip: '一键更新封面',
                 ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 书架内搜索栏（点顶栏的「书架内搜索」出现）。
+  Widget _buildSearchBar() {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              autofocus: true,
+              onChanged: (v) => setState(() => _query = v),
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: '搜索书名 / 作者',
+                prefixIcon: const Icon(Icons.manage_search_rounded, size: 20),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                  tooltip: '收起搜索',
+                  onPressed: () => setState(() {
+                    _showSearch = false;
+                    _query = '';
+                    _statusFilter = ShelfStatusFilter.all;
+                  }),
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final s in ShelfStatusFilter.values)
+                  ChoiceChip(
+                    label: Text(s.label, style: const TextStyle(fontSize: 12)),
+                    selected: _statusFilter == s,
+                    onSelected: (_) => setState(() => _statusFilter = s),
+                  ),
               ],
             ),
           ],

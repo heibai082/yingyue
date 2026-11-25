@@ -1,4 +1,4 @@
-// 书签与阅读统计：本地 JSON 持久化。
+﻿// 书签与阅读统计：本地 JSON 持久化。
 //
 // - 书签：书 + 章节序号 + 章内偏移 + 摘录（跳回原文定位）；
 // - 统计：总阅读时长、每日阅读时长、读完的书数（供记录页 / 统计页展示）。
@@ -224,6 +224,9 @@ class StatsStore extends ChangeNotifier with ReliablePersistence {
 
   /// 每日阅读秒数（按日期字符串 'YYYY-MM-DD'）。
   Map<String, int> get days => Map.unmodifiable(_days);
+
+  /// 今天已读秒数（阅读目标用）。
+  int get todaySeconds => _days[_dateKey(DateTime.now())] ?? 0;
 
   /// 累计有阅读记录的天数。
   int get readDays => _days.length;

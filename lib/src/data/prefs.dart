@@ -98,6 +98,19 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   /// 读一章自动往后缓存两章（漫画预取图片列表，小说直接缓存正文）。
   bool autoPrefetchChapters = true;
 
+  /// 漫画阅读模式：'scroll'（纵向连续，默认） / 'paged'（一页一屏，可双页）。
+  String comicPageMode = 'scroll';
+
+  /// 漫画从右往左读（日漫习惯）。
+  bool comicRightToLeft = false;
+
+  /// 漫画亮度（0.3~1）与色温（-1 冷 ~ +1 暖）。
+  double comicBrightness = 1.0;
+  double comicWarmth = 0.0;
+
+  /// 每日阅读目标（分钟；0 = 不设目标）。
+  int dailyGoalMinutes = 0;
+
   /// 章节 / 漫画图片缓存的总上限（MB）。超了按「最久没读」整本清理。
   ///
   /// 用户反馈的隐患：漫画缓存没有上限，长期使用会把手机塞满。
@@ -410,6 +423,12 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           autoPrefetchChapters = data['autoPrefetchChapters'] as bool? ?? true;
           autoTrackCache = data['autoTrackCache'] as bool? ?? true;
           cacheLimitMB = (data['cacheLimitMB'] as num?)?.toInt() ?? 2048;
+          dailyGoalMinutes = (data['dailyGoalMinutes'] as num?)?.toInt() ?? 0;
+          comicPageMode = data['comicPageMode'] as String? ?? 'scroll';
+          comicRightToLeft = data['comicRightToLeft'] as bool? ?? false;
+          comicBrightness =
+              (data['comicBrightness'] as num?)?.toDouble() ?? 1.0;
+          comicWarmth = (data['comicWarmth'] as num?)?.toDouble() ?? 0.0;
           wifiOnlyDownloads = data['wifiOnlyDownloads'] as bool? ?? false;
           webdavUrl = data['webdavUrl'] as String? ?? '';
           webdavUser = data['webdavUser'] as String? ?? '';
@@ -608,6 +627,40 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   void setAutoPrefetchChapters(bool v) {
     if (autoPrefetchChapters == v) return;
     autoPrefetchChapters = v;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setComicPageMode(String mode) {
+    if (comicPageMode == mode) return;
+    comicPageMode = mode;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setComicRightToLeft(bool v) {
+    if (comicRightToLeft == v) return;
+    comicRightToLeft = v;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setComicBrightness(double v) {
+    comicBrightness = v.clamp(0.3, 1.0);
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setComicWarmth(double v) {
+    comicWarmth = v.clamp(-1.0, 1.0);
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setDailyGoalMinutes(int minutes) {
+    final v = minutes <= 0 ? 0 : minutes.clamp(5, 600);
+    if (dailyGoalMinutes == v) return;
+    dailyGoalMinutes = v;
     _saveSoon();
     notifyListeners();
   }
@@ -1051,6 +1104,11 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
         'autoPrefetchChapters': autoPrefetchChapters,
         'autoTrackCache': autoTrackCache,
         'cacheLimitMB': cacheLimitMB,
+        'dailyGoalMinutes': dailyGoalMinutes,
+        'comicPageMode': comicPageMode,
+        'comicRightToLeft': comicRightToLeft,
+        'comicBrightness': comicBrightness,
+        'comicWarmth': comicWarmth,
         'wifiOnlyDownloads': wifiOnlyDownloads,
         'webdavUrl': webdavUrl,
         'webdavUser': webdavUser,

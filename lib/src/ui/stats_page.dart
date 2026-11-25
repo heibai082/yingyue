@@ -2,15 +2,17 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import '../data/prefs.dart';
 import '../data/stats_store.dart';
 import '../util/format.dart';
 import 'widgets/cute.dart';
 
 /// 阅读记录 / 统计页：累计时长、阅读时长曲线、连续天数、读完书数。
 class StatsPage extends StatefulWidget {
-  const StatsPage({super.key, required this.statsStore});
+  const StatsPage({super.key, required this.statsStore, required this.prefs});
 
   final StatsStore statsStore;
+  final AppPrefs prefs;
 
   @override
   State<StatsPage> createState() => _StatsPageState();
@@ -41,6 +43,8 @@ class _StatsPageState extends State<StatsPage> {
             children: [
               _heroCard(context),
               const SizedBox(height: 14),
+              _goalCard(context),
+              const SizedBox(height: 14),
               _badgesRow(context),
               const SizedBox(height: 14),
               _chartCard(context, days, maxSeconds, totalSeconds),
@@ -51,6 +55,100 @@ class _StatsPageState extends State<StatsPage> {
         },
       ),
     );
+  }
+
+  /// 今日阅读目标（每天读多少分钟；0 = 未设置）。
+  Widget _goalCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final goal = widget.prefs.dailyGoalMinutes;
+    final todayMinutes = widget.statsStore.todaySeconds ~/ 60;
+    final done = goal > 0 && todayMinutes >= goal;
+    final progress = goal <= 0 ? 0.0 : (todayMinutes / goal).clamp(0.0, 1.0);
+    return SoftCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                done ? Icons.emoji_events_rounded : Icons.flag_rounded,
+                size: 20,
+                color: scheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                goal <= 0 ? '今天读了 $todayMinutes 分钟' : '今日目标',
+                style: const TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: () => _editGoal(context),
+                child: Text(goal <= 0 ? '设目标' : '调整'),
+              ),
+            ],
+          ),
+          if (goal > 0) ...[
+            const SizedBox(height: 2),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(value: progress, minHeight: 7),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              done
+                  ? '今天已读 $todayMinutes 分钟，目标达成啦 🎀'
+                  : '已读 $todayMinutes / $goal 分钟 · 还差 ${goal - todayMinutes} 分钟',
+              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+            ),
+          ] else ...[
+            const SizedBox(height: 2),
+            Text(
+              '设一个每日目标，读到达成时会提醒你',
+              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editGoal(BuildContext context) async {
+    final current = widget.prefs.dailyGoalMinutes;
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 2, 20, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '每日阅读目标',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+            for (final m in const [0, 15, 30, 45, 60, 90])
+              ListTile(
+                dense: true,
+                title: Text(m == 0 ? '不设目标' : '$m 分钟'),
+                trailing: current == m
+                    ? const Icon(Icons.check_rounded, size: 18)
+                    : null,
+                onTap: () => Navigator.pop(ctx, m),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null) return;
+    widget.prefs.setDailyGoalMinutes(picked);
   }
 
   Widget _heroCard(BuildContext context) {
