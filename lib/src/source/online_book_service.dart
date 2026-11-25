@@ -17,6 +17,7 @@ import 'package:html/parser.dart' as html_parser;
 import '../data/models.dart';
 import 'ad_page_filter.dart';
 import 'analyze_rule.dart';
+import 'js_aes_content.dart';
 import 'chapter_order.dart';
 import 'analyze_url.dart';
 import 'http_client.dart';
@@ -517,7 +518,17 @@ class OnlineBookService {
     );
     final out = <String>[];
     final rule = source.contentRule?.content ?? '';
-    if (rule.trim().isNotEmpty) {
+    // 漫画团这类源：正文规则是 <js> + params + AES，App 侧直接解开
+    var aesHandled = false;
+    if (looksLikeAesComicRule(rule)) {
+      final decoded = decodeAesComicImages(rule, html, baseUrl: chapterUrl);
+      if (decoded.isNotEmpty) {
+        out.addAll(decoded);
+        aesHandled = true;
+        debugPrint('[comic] aesDecoded=${out.length}');
+      }
+    }
+    if (!aesHandled && rule.trim().isNotEmpty) {
       try {
         final engine = AnalyzeRule(html, baseUrl: source.bookSourceUrl);
         for (final part in engine.getStrings(rule)) {
