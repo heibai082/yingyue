@@ -48,9 +48,37 @@ class MainActivity : FlutterActivity() {
     // 热启动（已有实例）时通过 [notifyFileOpened] 直接推送。
     private var pendingOpenPath: String? = null
 
+    // 朗读通知（锁屏/通知栏控制）
+    private var ttsReceiver: android.content.BroadcastReceiver? = null
+    private val ttsActionFilter = "yingyue.tts.action"
+    private val ttsNotificationId = 42003
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingOpenPath = resolveOpenIntent(intent)
+        registerTtsReceiver()
+    }
+
+
+    /// 朗读通知上的「暂停/退出」按钮 → 回传给 Dart。
+    private fun registerTtsReceiver() {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: Intent?) {
+                val action = intent?.getStringExtra("action") ?: return
+                runOnUiThread { ttsChannel?.invokeMethod("ttsAction", action) }
+            }
+        }
+        ttsReceiver = receiver
+        val filter = android.content.IntentFilter(ttsActionFilter)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(receiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(receiver, filter)
+            }
+        } catch (_: Exception) {
+            ttsReceiver = null
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -157,7 +185,26 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(ok)
                 }
-                // 新章提醒（追更发现新章节时推一条）
+                // 朗读通知（锁屏也能暂停/退出）
+                "showTtsNotification" -> {
+                    val args = call.arguments as? Map<*, *>
+                    val title = args?.get("title") as? String ?: "正在朗读"
+                    val text = args?.get("text") as? String ?: ""
+                    try {
+                        showTtsNotification(title, text)
+                        result.success(true)
+                    } catch (_: Exception) {
+                        result.success(false)
+                    }
+                }
+                "hideTtsNotification" -> {
+                    try {
+                        val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+                        nm.cancel(ttsNotificationId)
+                    } catch (_: Exception) {
+                    }
+                    result.success(true)
+                }                // 新章提醒（追更发现新章节时推一条）
                 "showNewChapters" -> {
                     val args = call.arguments as? Map<*, *>
                     val title = args?.get("title") as? String ?: "有新章节啦"
@@ -854,6 +901,12 @@ class MainActivity : FlutterActivity() {
         localLlm?.dispose()
         localLlm = null
         shutdownTts()
+        // 朗读通知的按钮回调不再需要
+        try {
+            ttsReceiver?.let { unregisterReceiver(it) }
+        } catch (_: Exception) {
+        }
+        ttsReceiver = null
         super.onDestroy()
     }
 
@@ -928,5 +981,37 @@ class MainActivity : FlutterActivity() {
     private fun cancelDownloadNotification() {
         val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
         nm.cancel(downloadNotificationId)
+    }
+
+    // ---------- 朗读通知（锁屏/通知栏控制） ----------
+    private fun showTtsNotification(title: String, text: String) {
+        ensureDownloadChannel()
+        fun pending(code: Int, action: String): android.app.PendingIntent {
+            val intent = Intent(ttsActionFilter).apply {
+                setPackage(packageName)
+                putExtra("action", action)
+            }
+            return android.app.PendingIntent.getBroadcast(
+                this,
+                code,
+                intent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                    android.app.PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+        val builder = androidx.core.app.NotificationCompat.Builder(this, downloadChannelId)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .addAction(
+                android.R.drawable.ic_media_pause,
+                "暂停/继续",
+                pending(1, "toggle"),
+            )
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "退出", pending(2, "stop"))
+        val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        nm.notify(ttsNotificationId, builder.build())
     }
 }

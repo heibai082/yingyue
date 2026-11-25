@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 
 import 'persistence.dart';
 
@@ -83,6 +83,31 @@ class BackupRestoreResult {
 ///
 /// 刻意不依赖 BuildContext：页面只负责按钮和提示，打包、写盘、路径兜底
 /// 全部收在这里，以后要做「每天自动备份」也能直接复用。
+/// 备份内容预览（恢复前给用户看一眼，别糊里糊涂覆盖）。
+class BackupPreview {
+  const BackupPreview({
+    required this.files,
+    required this.books,
+    required this.sources,
+    required this.bookmarks,
+  });
+
+  final List<String> files;
+  final int books;
+  final int sources;
+  final int bookmarks;
+
+  bool get empty => files.isEmpty;
+
+  String get summary {
+    final parts = <String>[];
+    if (books > 0) parts.add('$books 本书');
+    if (sources > 0) parts.add('$sources 个书源');
+    if (bookmarks > 0) parts.add('$bookmarks 条书签');
+    return parts.isEmpty ? '（没有可识别的数据）' : parts.join('、');
+  }
+}
+
 class BackupService {
   BackupService({
     required this.prefs,
@@ -152,6 +177,50 @@ class BackupService {
   /// 只认白名单里的「纯文件名」，压缩包里带 `../` 或别的文件名一律忽略，
   /// 这样就算用户随手恢复一个恶意 zip 也写不到 App 目录之外去。
   /// 覆盖前先把原文件存成 `<name>.bak`，给手滑留一条退路。
+  /// 只读检查备份里有什么（恢复前预览用）。
+  Future<BackupPreview> inspect(File zip) async {
+    final List<int> bytes;
+    try {
+      bytes = await zip.readAsBytes();
+    } catch (e) {
+      throw BackupException('读不了这个备份文件（$e）');
+    }
+    final Archive archive;
+    try {
+      archive = ZipDecoder().decodeBytes(bytes, verify: false);
+    } catch (_) {
+      throw const BackupException('这个文件不是 sakura 的备份（解压失败）');
+    }
+    final files = <String>[];
+    var books = 0;
+    var sources = 0;
+    var bookmarks = 0;
+    for (final entry in archive.files) {
+      if (!entry.isFile) continue;
+      final name = entry.name.replaceAll('\\', '/');
+      if (!kBackupFiles.contains(name)) continue;
+      files.add(name);
+      try {
+        final data = jsonDecode(utf8.decode(entry.content as List<int>));
+        if (name == 'library.json' && data is Map) {
+          books = (data['books'] as List?)?.length ?? 0;
+        } else if (name == 'book_sources.json' && data is List) {
+          sources = data.length;
+        } else if (name == 'bookmarks.json' && data is List) {
+          bookmarks = data.length;
+        }
+      } catch (_) {
+        // 单个文件解析失败不影响预览
+      }
+    }
+    return BackupPreview(
+      files: files,
+      books: books,
+      sources: sources,
+      bookmarks: bookmarks,
+    );
+  }
+
   Future<BackupRestoreResult> restore(File zip) async {
     if (!await zip.exists()) {
       throw const BackupException('找不到这个备份文件，检查一下路径有没有写错～');

@@ -108,11 +108,30 @@ class _BackupPageState extends State<BackupPage> {
   /// 从本地备份列表点进来：二次确认后恢复。
   Future<void> _restoreFile(File file) async {
     if (_busy) return;
+    // 恢复前先读一眼备份里有什么（0.51）
+    String detail = '';
+    try {
+      final preview = await _backup.inspect(file);
+      if (preview.empty) {
+        _toast('这个备份里没有可识别的数据', error: true);
+        return;
+      }
+      detail =
+          '\n\n备份内容：${preview.summary}'
+          '（${preview.files.length} 个文件）';
+    } on BackupException catch (e) {
+      _toast(e.message, error: true);
+      return;
+    } catch (_) {
+      // 预览失败不阻止恢复
+    }
     final ok = await _confirm(
       title: '确定要恢复吗？',
       message:
           '会用「${_fileName(file.path)}」里的内容覆盖当前的设置、书架、'
-          '书签和阅读统计。\n旧文件会留一份 .bak，但恢复了就回不去啦。',
+          '书签和阅读统计。$detail\n'
+          '书架按「最后阅读时间」合并（不会把新进度冲掉）；'
+          '其它文件会留一份 .bak，但恢复了就回不去啦。',
       okText: '恢复',
     );
     if (!ok) return;

@@ -52,6 +52,37 @@ class NativeBridge {
     });
   }
 
+  static void Function(String action)? _ttsActionHandler;
+  static bool _ttsHandlerInstalled = false;
+
+  /// 注册「朗读通知按钮」回调（toggle / stop）。重复调用只生效一次。
+  static void installTtsActionHandler(void Function(String action) handler) {
+    _ttsActionHandler = handler;
+    if (_ttsHandlerInstalled) return;
+    _ttsHandlerInstalled = true;
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'ttsAction') {
+        _ttsActionHandler?.call(call.arguments?.toString() ?? '');
+      }
+      return null;
+    });
+  }
+
+  /// 显示朗读通知（锁屏/通知栏可暂停、退出）。
+  static Future<void> showTtsNotification({
+    required String title,
+    required String text,
+  }) async {
+    if (!_supported) return;
+    await _invoke<bool>('showTtsNotification', {'title': title, 'text': text});
+  }
+
+  /// 关掉朗读通知。
+  static Future<void> hideTtsNotification() async {
+    if (!_supported) return;
+    await _invoke<bool>('hideTtsNotification');
+  }
+
   /// 新章提醒（追更发现新章节时用）。
   static Future<void> showNewChapters({
     required String title,

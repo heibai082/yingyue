@@ -2,7 +2,13 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+
+import 'dart:convert';
+
+import 'package:archive/archive.dart';
 import 'package:sakura_read/src/data/auto_backup.dart';
+import 'package:sakura_read/src/data/backup_service.dart';
+import 'package:sakura_read/src/data/long_image_split.dart';
 import 'package:sakura_read/src/data/bookmark_export.dart';
 import 'package:sakura_read/src/data/chapter_health.dart';
 import 'package:sakura_read/src/data/chapter_patch.dart';
@@ -126,11 +132,16 @@ void main() {
       ];
       final drop = pickBackupsToDelete(entries, keep: 7);
       expect(drop, hasLength(3));
-      expect(drop.map((e) => e.name), containsAll(['backup-0.zip', 'backup-1.zip', 'backup-2.zip']));
+      expect(
+        drop.map((e) => e.name),
+        containsAll(['backup-0.zip', 'backup-1.zip', 'backup-2.zip']),
+      );
     });
 
     test('不足 7 份不删', () {
-      final entries = [for (var i = 0; i < 3; i++) zip('b$i.zip', DateTime(2026))];
+      final entries = [
+        for (var i = 0; i < 3; i++) zip('b$i.zip', DateTime(2026)),
+      ];
       expect(pickBackupsToDelete(entries), isEmpty);
     });
   });
@@ -208,7 +219,9 @@ void main() {
   group('自动备份的触发条件', () {
     test('没开开关 / 没配 WebDAV 都不跑；配好且今天没备份过才跑', () async {
       final tmp = await Directory.systemTemp.createTemp('sakura_auto');
-      final prefs = AppPrefs(dirsOverride: AppDirs(files: tmp.path, cache: tmp.path));
+      final prefs = AppPrefs(
+        dirsOverride: AppDirs(files: tmp.path, cache: tmp.path),
+      );
       await prefs.load();
       addTearDown(prefs.dispose);
       final svc = AutoBackupService(
@@ -226,6 +239,80 @@ void main() {
 
       prefs.setLastAutoBackupDay('2026-11-25');
       expect(svc.due, isFalse, reason: '今天已经备份过');
+      try {
+        await tmp.delete(recursive: true);
+      } catch (_) {}
+    });
+  });
+  group('超长图切分', () {
+    test('普通图不切', () {
+      expect(splitLongImage(970, 1416), hasLength(1));
+    });
+
+    test('超长图切成多段，且完整覆盖高度', () {
+      final rects = splitLongImage(800, 12000, maxSliceHeight: 4096);
+      expect(rects.length, 3);
+      expect(rects.first.top, 0);
+      expect(rects.last.bottom, closeTo(12000, 0.01));
+      // 段与段相连、无重叠
+      for (var i = 1; i < rects.length; i++) {
+        expect(rects[i].top, closeTo(rects[i - 1].bottom, 0.01));
+      }
+    });
+
+    test('宽度非法时返回空，不崩', () {
+      expect(splitLongImage(0, 100), isEmpty);
+      expect(splitLongImage(100, 0), isEmpty);
+    });
+  });
+
+  group('恢复前预览', () {
+    test('能读出备份里有几本书 / 书签 / 书源', () async {
+      final tmp = await Directory.systemTemp.createTemp('sakura_inspect');
+      final prefs = AppPrefs(
+        dirsOverride: AppDirs(files: tmp.path, cache: tmp.path),
+      );
+      await prefs.load();
+      addTearDown(prefs.dispose);
+      final archive = Archive();
+      void add(String name, String text) {
+        final bytes = utf8.encode(text);
+        archive.addFile(ArchiveFile(name, bytes.length, bytes));
+      }
+
+      add(
+        'library.json',
+        jsonEncode({
+          'books': [
+            {'id': 'a', 'path': 'p/a'},
+            {'id': 'b', 'path': 'p/b'},
+          ],
+        }),
+      );
+      add(
+        'bookmarks.json',
+        jsonEncode([
+          {'id': '1'},
+          {'id': '2'},
+          {'id': '3'},
+        ]),
+      );
+      add(
+        'book_sources.json',
+        jsonEncode([
+          {'u': 1},
+        ]),
+      );
+      add('not-in-whitelist.txt', 'x');
+      final zip = File('${tmp.path}/bak.zip');
+      await zip.writeAsBytes(ZipEncoder().encode(archive));
+
+      final preview = await BackupService(prefs: prefs).inspect(zip);
+      expect(preview.books, 2);
+      expect(preview.bookmarks, 3);
+      expect(preview.sources, 1);
+      expect(preview.files, isNot(contains('not-in-whitelist.txt')));
+      expect(preview.summary, contains('2 本书'));
       try {
         await tmp.delete(recursive: true);
       } catch (_) {}

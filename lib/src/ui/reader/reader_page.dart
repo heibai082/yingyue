@@ -186,6 +186,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       });
       return;
     }
+    NativeBridge.installTtsActionHandler((action) {
+      if (!mounted) return;
+      if (action == 'stop') {
+        unawaited(_stopTts());
+      } else {
+        unawaited(_toggleTts());
+      }
+    });
     _chapterIndex = widget.chapterIndex ?? book?.safeChapterIndex ?? 0;
     _targetOffset = widget.charOffset ?? book?.charOffset ?? 0;
     WidgetsBinding.instance.addObserver(this);
@@ -2161,6 +2169,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _tts.onParagraph = _onTtsParagraph;
     _tts.onFinished = _onTtsChapterFinished;
     setState(() => _ttsActive = true);
+    // 锁屏/通知栏也能暂停、退出（0.51）
+    unawaited(
+      NativeBridge.showTtsNotification(
+        title: '正在朗读《${_book?.title ?? ''}》',
+        text: _book?.chapters[_chapterIndex].title ?? '',
+      ),
+    );
     await _tts.start(
       _ttsParagraphs.map((p) => p.text).toList(),
       from: from,
@@ -2320,6 +2335,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   Future<void> _stopTts() async {
     _ttsSleepTimer?.cancel();
+    unawaited(NativeBridge.hideTtsNotification());
     await _tts.stop();
     _tts.onParagraph = null;
     _tts.onFinished = null;

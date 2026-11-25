@@ -14,6 +14,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../ui/widgets/sliced_file_image.dart';
+
 import '../source/http_client.dart';
 import 'book_store.dart';
 import '../source/ad_page_filter.dart';
@@ -216,12 +218,11 @@ class _ComicImageState extends State<ComicImage> {
     return GestureDetector(
       onLongPress: _retry,
       child: cached != null
-          ? Image.file(
-              File(cached),
+          // 本地图：超长图会分段渲染，避免大纹理卡顿（0.51）
+          ? SlicedFileImage(
               key: ValueKey('file-${file.path}-$_attempt'),
+              file: File(cached),
               fit: widget.fit,
-              gaplessPlayback: true,
-              errorBuilder: (ctx, e, st) => _errorBox(ctx),
             )
           : _networkWithCache(),
     );
