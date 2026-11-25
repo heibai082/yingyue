@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:io';
 
 import '../source/subscription_link.dart';
@@ -105,6 +105,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _scheduleDailySourceSync();
     _scheduleCacheTrack();
     _scheduleAutoBackup();
+    _scheduleCacheSync();
     _check();
   }
 
@@ -168,6 +169,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           .showSnackBar(SnackBar(content: Text('已从同步服务器拉取：${result.summary}')));
     }
   }
+  // ==================== 缓存自动上传 ====================
+
+  Timer? _cacheSyncTimer;
+
+  /// 已缓存但还没上传的章节：启动后补一次，之后每 3 分钟补一次（Wi-Fi 下）。
+  void _scheduleCacheSync() {
+    if (Platform.environment['FLUTTER_TEST'] == 'true') return;
+    void run() {
+      if (!mounted) return;
+      unawaited(_sync.autoPushPending(limit: 10));
+    }
+
+    Timer(const Duration(seconds: 20), run);
+    _cacheSyncTimer?.cancel();
+    _cacheSyncTimer = Timer.periodic(const Duration(minutes: 3), (_) => run());
+  }
   // ==================== WebDAV 自动备份 ====================
 
   Timer? _autoBackupTimer;
@@ -177,6 +194,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (Platform.environment['FLUTTER_TEST'] == 'true') return;
     _autoBackupTimer?.cancel();
     _sync.dispose();
+    _cacheSyncTimer?.cancel();
     _autoBackupTimer = Timer(const Duration(seconds: 20), () async {
       if (!mounted) return;
       final service = AutoBackupService(prefs: widget.prefs);
@@ -204,6 +222,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _cacheTrackTimer?.cancel();
     _autoBackupTimer?.cancel();
     _sync.dispose();
+    _cacheSyncTimer?.cancel();
     _cacheTrackTimer = Timer(const Duration(seconds: 15), () {
       unawaited(_runCacheTrack());
     });
@@ -413,6 +432,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       // 从后台回来也补一轮（手机上「每天第一次打开」往往就是切回前台）
       _scheduleCacheTrack();
       _scheduleAutoBackup();
+      _scheduleCacheSync();
     }
   }
 
@@ -425,6 +445,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _cacheTrackTimer?.cancel();
     _autoBackupTimer?.cancel();
     _sync.dispose();
+    _cacheSyncTimer?.cancel();
     _cacheTracker.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();

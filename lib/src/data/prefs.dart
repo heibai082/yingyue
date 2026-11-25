@@ -116,6 +116,12 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
 
   /// 连正文 / 漫画图片也同步到服务器（网页端才能直接读）。
   bool syncCache = true;
+
+  /// 缓存章节自动上传（不用手动点）。
+  bool autoUploadCache = true;
+
+  /// 自动上传仅在 Wi-Fi 下进行。
+  bool syncCacheWifiOnly = true;
   int lastSyncAt = 0;
   String syncDeviceName = '';
 
@@ -447,6 +453,8 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           syncToken = data['syncToken'] as String? ?? '';
           syncEnabled = data['syncEnabled'] as bool? ?? false;
           syncCache = data['syncCache'] as bool? ?? true;
+          autoUploadCache = data['autoUploadCache'] as bool? ?? true;
+          syncCacheWifiOnly = data['syncCacheWifiOnly'] as bool? ?? true;
           lastSyncAt = (data['lastSyncAt'] as num?)?.toInt() ?? 0;
           syncDeviceName = data['syncDeviceName'] as String? ?? '';
           lastAutoBackupDay = data['lastAutoBackupDay'] as String? ?? '';
@@ -690,6 +698,8 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
     String? deviceName,
     bool? enabled,
     bool? cache,
+    bool? autoUpload,
+    bool? wifiOnly,
   }) {
     if (baseUrl != null) syncBaseUrl = baseUrl.trim();
     if (lanUrl != null) syncLanUrl = lanUrl.trim();
@@ -697,6 +707,8 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
     if (deviceName != null) syncDeviceName = deviceName.trim();
     if (enabled != null) syncEnabled = enabled;
     if (cache != null) syncCache = cache;
+    if (autoUpload != null) autoUploadCache = autoUpload;
+    if (wifiOnly != null) syncCacheWifiOnly = wifiOnly;
     _saveSoon();
     notifyListeners();
   }
@@ -1175,6 +1187,8 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
         'syncToken': syncToken,
         'syncEnabled': syncEnabled,
         'syncCache': syncCache,
+        'autoUploadCache': autoUploadCache,
+        'syncCacheWifiOnly': syncCacheWifiOnly,
         'lastSyncAt': lastSyncAt,
         'syncDeviceName': syncDeviceName,
         'lastAutoBackupDay': lastAutoBackupDay,

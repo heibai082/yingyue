@@ -1,4 +1,4 @@
-﻿// 同步服务（0.52）：payload、按时间合并、HTTP 客户端、开关保护。
+// 同步服务（0.52）：payload、按时间合并、HTTP 客户端、开关保护。
 import 'dart:convert';
 import 'dart:io';
 
@@ -302,6 +302,45 @@ void main() {
         sources.sources.any((s) => s.bookSourceUrl == 'https://a'),
         isTrue,
       );
+    });
+  });
+  group('缓存自动上传', () {
+    test('只传没传过的，传完记下来', () async {
+      store.addOnline(_book('p/c', chapter: 0, lastReadAt: 1));
+      final book = store.byId('p/c')!;
+      await store.writeCachedChapter(book, 0, '第一章正文');
+      await store.refreshChapterCache(book.id);
+      expect(book.chapterCache, contains(0));
+
+      var posts = 0;
+      prefs.setSyncConfig(
+        baseUrl: 'http://srv:8090',
+        token: 't',
+        enabled: true,
+        cache: true,
+        autoUpload: true,
+        wifiOnly: false,
+      );
+      final sync = SyncService(
+        prefs: prefs,
+        store: store,
+        client: SyncClient(
+          baseUrl: 'http://srv:8090',
+          token: 't',
+          client: MockClient((req) async {
+            if (req.method == 'POST' && req.url.path == '/api/chapters') {
+              posts++;
+            }
+            return http.Response('{"ok":true}', 200);
+          }),
+        ),
+      );
+      addTearDown(sync.dispose);
+      expect(await sync.autoPushPending(), 1);
+      expect(posts, 1);
+      // 再跑一次，不应该重复传
+      expect(await sync.autoPushPending(), 0);
+      expect(posts, 1);
     });
   });
 }

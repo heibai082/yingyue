@@ -1,12 +1,17 @@
-﻿// 同步调度：变化就推（防抖 3 秒），启动拉一次（0.52）。
+﻿// 缓存自动上传（0.56）：把「已缓存但还没上传」的章节在后台补齐，不用手动点。
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
-import 'book_store.dart';
-import 'prefs.dart';
+import '../platform/native_bridge.dart';
 import '../source/models.dart';
 import '../source/source_store.dart';
+import 'book_store.dart';
+import 'chapter_cache.dart';
+import 'models.dart';
+import 'prefs.dart';
 import 'stats_store.dart';
 import 'sync_client.dart';
 
@@ -40,6 +45,7 @@ class SyncService {
   bool _started = false;
   bool _applyingRemote = false;
   bool _busy = false;
+  Set<String>? _uploaded;
 
   bool get enabled => prefs.syncEnabled && prefs.syncBaseUrl.trim().isNotEmpty;
 
@@ -144,8 +150,6 @@ class SyncService {
   }
 
   /// 从服务器拉书源并**合并**（按 URL 去重，本地已有的保留）。
-  ///
-  /// 新设备第一次同步就能把书源带过来；老设备不会因此丢掉本地修改。
   Future<int> pullSources() async {
     final s = sources;
     if (!enabled || s == null) return 0;
@@ -231,6 +235,157 @@ class SyncService {
     } catch (e) {
       debugPrint('[sync] upload images failed: $e');
     }
+  }
+  // ==================== 缓存上传 ====================
+
+  File _uploadedFile() => File('${store.appDirs.files}/sync_uploaded.json');
+
+  Future<Set<String>> _loadUploaded() async {
+    final cached = _uploaded;
+    if (cached != null) return cached;
+    final set = <String>{};
+    try {
+      final f = _uploadedFile();
+      if (await f.exists()) {
+        final data = jsonDecode(await f.readAsString());
+        if (data is List) {
+          set.addAll(data.map((e) => '$e'));
+        }
+      }
+    } catch (_) {}
+    _uploaded = set;
+    return set;
+  }
+
+  Future<void> _saveUploaded(Set<String> set) async {
+    try {
+      final f = _uploadedFile();
+      await f.parent.create(recursive: true);
+      await f.writeAsString(jsonEncode(set.toList()));
+    } catch (_) {}
+  }
+
+  static String _keyOf(Book b, int idx) => '${b.id}#$idx';
+
+  /// 上传一章（正文或漫画图片字节）。返回 true 表示成功。
+  Future<bool> _uploadChapterAt(Book book, int idx) async {
+    final dir = ChapterCache.imageDirFor(store.appDirs, book, idx);
+    if (dir.existsSync()) {
+      final manifest = ChapterCache.readManifest(dir);
+      if (manifest == null || manifest.isEmpty) return false;
+      final entries = <Map<String, String>>[];
+      var bytes = 0;
+      for (var i = 0; i < manifest.length; i++) {
+        final url = manifest[i]['url'] ?? '';
+        final file = ChapterCache.resolveImage(dir, i, url);
+        if (file == null) continue;
+        final data = await file.readAsBytes();
+        bytes += data.length;
+        if (bytes > 8 * 1024 * 1024) break;
+        entries.add({
+          'name': file.uri.pathSegments.last,
+          'data': base64Encode(data),
+        });
+      }
+      if (entries.isEmpty) return false;
+      await client.uploadChapter({
+        'path': book.path,
+        'index': idx,
+        'title': book.chapters.length > idx
+            ? book.chapters[idx].title
+            : '第 ${idx + 1} 话',
+        'imagesBase64': entries,
+      });
+      return true;
+    }
+    final text = await store.readCachedChapter(book, idx);
+    if (text == null || text.trim().isEmpty) return false;
+    if (text.length > 2 * 1024 * 1024) return false;
+    await client.uploadChapter({
+      'path': book.path,
+      'index': idx,
+      'title': book.chapters.length > idx
+          ? book.chapters[idx].title
+          : '第 ${idx + 1} 章',
+      'text': text,
+    });
+    return true;
+  }
+
+  /// 自动补齐：把「已缓存但没上传」的章节传上去，每次最多 [limit] 章。
+  ///
+  /// 只在开了自动上传、且（可选）在 Wi-Fi 下运行；失败不抛错，下次再试。
+  Future<int> autoPushPending({int limit = 20}) async {
+    if (!enabled || !prefs.syncCache || !prefs.autoUploadCache) return 0;
+    if (prefs.syncCacheWifiOnly) {
+      final wifi = await NativeBridge.isOnWifi();
+      if (!wifi) return 0;
+    }
+    final uploaded = await _loadUploaded();
+    final pending = <({Book book, int idx})>[];
+    for (final book in store.books) {
+      if (book.chapterCache.isEmpty) continue;
+      for (final idx in book.chapterCache.toList()..sort()) {
+        if (!uploaded.contains(_keyOf(book, idx))) {
+          pending.add((book: book, idx: idx));
+        }
+      }
+    }
+    if (pending.isEmpty) return 0;
+    var done = 0;
+    for (final item in pending.take(limit)) {
+      try {
+        if (await _uploadChapterAt(item.book, item.idx)) {
+          uploaded.add(_keyOf(item.book, item.idx));
+          done++;
+        }
+      } catch (e) {
+        debugPrint('[sync] auto upload failed: $e');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    await _saveUploaded(uploaded);
+    return done;
+  }
+
+  /// 手动「上传本机缓存」：一次把全部待传的传完。
+  Future<({int books, int chapters, int skipped})> pushCachedContent({
+    void Function(int done, int total)? onProgress,
+  }) async {
+    if (!enabled || !prefs.syncCache)
+      return (books: 0, chapters: 0, skipped: 0);
+    final uploaded = await _loadUploaded();
+    final targets = [
+      for (final b in store.books)
+        if (b.chapterCache.isNotEmpty) b,
+    ];
+    var total = 0;
+    for (final b in targets) {
+      total += b.chapterCache.length;
+    }
+    var done = 0;
+    var okCount = 0;
+    var skipped = 0;
+    for (final book in targets) {
+      for (final idx in book.chapterCache.toList()..sort()) {
+        done++;
+        onProgress?.call(done, total);
+        try {
+          if (await _uploadChapterAt(book, idx)) {
+            uploaded.add(_keyOf(book, idx));
+            okCount++;
+          } else {
+            skipped++;
+          }
+        } catch (e) {
+          debugPrint('[sync] 上传缓存失败 ${book.title}#$idx: $e');
+          skipped++;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    }
+    await _saveUploaded(uploaded);
+    return (books: targets.length, chapters: okCount, skipped: skipped);
   }
 
   void dispose() {

@@ -604,6 +604,32 @@ class Handler(BaseHTTPRequestHandler):
                 idx = int(payload.get("index") or 0)
                 images = payload.get("images") or []
                 saved = []
+                # 手机直接上传图片字节（已缓存漫画）：imagesBase64=[{name,data}]
+                raw_b64 = payload.get("imagesBase64") or []
+                if raw_b64:
+                    folder0 = os.path.join(
+                        chapters_dir(udir), chapter_key(path_key), "%06d" % idx
+                    )
+                    os.makedirs(folder0, exist_ok=True)
+                    for n, item in enumerate(raw_b64):
+                        try:
+                            if isinstance(item, dict):
+                                data_b64 = item.get("data") or ""
+                                name = item.get("name") or "img.jpg"
+                            else:
+                                data_b64, name = str(item), "img.jpg"
+                            ext = os.path.splitext(name)[1].lower() or ".jpg"
+                            if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                                ext = ".jpg"
+                            blob = base64.b64decode(data_b64)
+                            if not blob:
+                                continue
+                            with open(os.path.join(folder0, "%04d%s" % (n, ext)), "wb") as fh:
+                                fh.write(blob)
+                            saved.append(n)
+                        except Exception as e3:
+                            print("[chapter] base64 图片保存失败: %s" % e3)
+                    payload["images"] = ["local:%d" % n for n in saved]
                 if images:
                     folder = os.path.join(
                         chapters_dir(udir), chapter_key(path_key), "%06d" % idx
