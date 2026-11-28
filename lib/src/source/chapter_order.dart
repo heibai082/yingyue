@@ -54,16 +54,28 @@ List<ChapterRef> normalizeChapterOrder(
       kept.add((chapter: c, number: -1));
     }
   }
+  // 「卷 + 话」混在一起：无视类型，直接按 1、2、3… 升序
+  final kinds = {for (final e in kept) chapterKind(e.chapter)};
+  final mixedKinds = kinds.contains(0) && kinds.contains(1);
+  if (mixedKinds) {
+    final indexed = [
+      for (var i = 0; i < kept.length; i++)
+        (i, kept[i].chapter, kept[i].number),
+    ];
+    indexed.sort((a, b) {
+      final byNum = a.$3.compareTo(b.$3);
+      return byNum != 0 ? byNum : a.$1.compareTo(b.$1);
+    });
+    return [for (final e in indexed) e.$2];
+  }
+
   if (!newestFirst) return [for (final e in kept) e.chapter];
 
-  // 漫画：类型分组 + 组内降序（同序号的保持原相对顺序）
+  // 单一类型（纯话 / 纯章）：漫画仍按最新话在前
   final indexed = [
     for (var i = 0; i < kept.length; i++) (i, kept[i].chapter, kept[i].number),
   ];
   indexed.sort((a, b) {
-    final kindA = chapterKind(a.$2);
-    final kindB = chapterKind(b.$2);
-    if (kindA != kindB) return kindA.compareTo(kindB);
     final byNum = b.$3.compareTo(a.$3);
     return byNum != 0 ? byNum : a.$1.compareTo(b.$1);
   });

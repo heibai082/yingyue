@@ -126,11 +126,10 @@ void main() {
     ];
     final fixed = normalizeChapterOrder(raw, newestFirst: true);
     final titles = [for (final c in fixed) c.title];
-    // 卷在前（10→7），话/回在后（41→1）
-    expect(titles.take(4), ['第10卷', '第09卷', '第08卷', '第07卷']);
-    expect(titles[4], '第41话');
-    expect(titles.last, '第1话');
-    // 卷和同号的「话」不会被误去重（这里第7卷与第7话不存在，但同号要能共存）
+    // 卷/话混排：无视类型，按 1、2、3… 升序
+    expect(titles.take(6), ['第1话', '第2话', '第07卷', '第08卷', '第09卷', '第10卷']);
+    expect(titles[6], '第17.5回');
+    expect(titles.last, '第41话');
   });
 
   test('同号不同类（第1卷 vs 第1话）都保留', () {

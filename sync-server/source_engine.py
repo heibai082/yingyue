@@ -566,16 +566,16 @@ def sort_chapters(chapters, newest_first):
             if u:
                 seen_urls.add(u)
             kept.append((c, -1.0))
+    # 卷 + 话混排：无视类型，按序号升序（用户要求 1、2、3…）
+    kinds = {_chap_kind(c.get("title", "")) for c, _n in kept}
+    if 0 in kinds and 1 in kinds:
+        indexed = list(enumerate(kept))
+        indexed.sort(key=lambda pair: (pair[1][1], pair[0]))
+        return [c for _, (c, _n) in indexed]
     if not newest_first:
         return [c for c, _ in kept]
     indexed = list(enumerate(kept))
-    indexed.sort(
-        key=lambda pair: (
-            _chap_kind(pair[1][0].get("title", "")),
-            -pair[1][1],
-            pair[0],
-        )
-    )
+    indexed.sort(key=lambda pair: (-pair[1][1], pair[0]))
     return [c for _, (c, _n) in indexed]
 
 

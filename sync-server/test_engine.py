@@ -64,9 +64,9 @@ class EngineTest(unittest.TestCase):
         ]
         out = se.sort_chapters(raw, True)
         titles = [c["title"] for c in out]
-        self.assertEqual(titles[:3], ["第10卷", "第09卷", "第07卷"])
-        self.assertEqual(titles[3], "第41话")
-        self.assertEqual(titles[-1], "第1话")
+        # 卷/话混排：无视类型，按序号升序
+        self.assertEqual(titles[:3], ["第1话", "第2话", "第07卷"])
+        self.assertEqual(titles[-2:], ["第38话", "第41话"])
 
     def test_sort_novel_keeps_order_and_dedupes(self):
         raw = [

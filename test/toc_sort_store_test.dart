@@ -34,8 +34,9 @@ void main() {
 
     final b = store.byId('b1')!;
     final ordered = [for (final c in b.chapters) c.title];
-    expect(ordered.take(4), ['第10卷', '第09卷', '第08卷', '第07卷']);
-    expect(ordered[4], '第41话');
+    expect(ordered.take(4), ['第07卷', '第08卷', '第09卷', '第10卷']);
+    expect(ordered[4], '第39话');
+    expect(ordered.last, '第41话');
     expect(b.chapters[b.chapterIndex].title, '第41话');
 
     store.dispose();

@@ -12,7 +12,7 @@ int? chapterNumber(ChapterRef chapter) {
   ).firstMatch(href);
   if (slot != null) return int.tryParse(slot.group(1)!);
   final title = chapter.title;
-  final cn = RegExp(r'第\s*(\d+)\s*[话話章集回卷篇]').firstMatch(title);
+  final cn = RegExp(r'第\s*(\d+)(?:\.\d+)?\s*[话話章集回卷篇]').firstMatch(title);
   if (cn != null) return int.tryParse(cn.group(1)!);
   final tail = RegExp(r'(\d+)(?!.*\d)').firstMatch(href);
   if (tail != null) return int.tryParse(tail.group(1)!);
