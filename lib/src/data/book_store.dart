@@ -123,6 +123,7 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
   }
 
   Future<void> load() async {
+    final _orderFixed = <String>{};
     _dirs = _dirsOverride ?? await NativeBridge.appDirs();
     _file = File('${_dirs!.files}/library.json');
     try {
@@ -133,7 +134,7 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
             if (item is Map) {
               try {
                 final book = Book.fromJson(Map<String, dynamic>.from(item));
-                _repairChapterOrder(book);
+                if (_repairChapterOrder(book)) _orderFixed.add(book.id);
                 _books.add(book);
               } catch (_) {
                 // 跳过坏数据
@@ -144,6 +145,10 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
       }
     } catch (_) {
       // 读取失败时以空书架启动
+    }
+    // 目录重排后「章号 → 章节」的对应关系变了，缓存索引要按 href 重建
+    for (final id in _orderFixed) {
+      unawaited(refreshChapterCache(id));
     }
     notifyListeners();
     // 老版本的缓存放在「系统缓存目录 + 按章序号命名」的地方：能搬的搬过来，
@@ -453,17 +458,19 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
 
   /// 老数据修复：漫画目录被站点「最新几话前置」搞成重复 + 乱序时，
   /// 按序号重排一次（只对「第一话序号 > 最后一话序号」的书动手）。
-  static void _repairChapterOrder(Book book) {
-    if (book.format != BookFormat.online) return;
-    if (book.chapters.length < 2) return;
-    if (!looksNewestFirst(book.chapters)) return;
-    // 记住「当前看的是哪一话」，重排后再按链接找回它的新位置，
-    // 否则进度序号会指到别的章节上
+  static bool _repairChapterOrder(Book book) {
+    if (book.format != BookFormat.online) return false;
+    if (book.chapters.length < 2) return false;
+    // 记住「当前看的是哪一话」，重排后再按链接找回它的新位置
     final currentHref =
         book.chapterIndex >= 0 && book.chapterIndex < book.chapters.length
         ? book.chapters[book.chapterIndex].href
         : null;
-    final fixed = normalizeChapterOrder(book.chapters, newestFirst: true);
+    final fixed = normalizeChapterOrder(
+      book.chapters,
+      newestFirst: looksNewestFirst(book.chapters),
+    );
+    applyCanonicalTitles(fixed);
     book.chapters
       ..clear()
       ..addAll(fixed);
@@ -471,6 +478,7 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
       final idx = book.chapters.indexWhere((c) => c.href == currentHref);
       if (idx >= 0) book.chapterIndex = idx;
     }
+    return true;
   }
 
   Book? byId(String id) {
@@ -501,6 +509,7 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
       if (b.format != BookFormat.online || b.chapters.length < 2) continue;
       final newest = looksNewestFirst(b.chapters);
       final sorted = normalizeChapterOrder(b.chapters, newestFirst: newest);
+      applyCanonicalTitles(sorted);
       if (sorted.length == b.chapters.length &&
           _sameOrder(b.chapters, sorted)) {
         continue;
@@ -521,6 +530,7 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
       } else {
         b.chapterIndex = b.chapterIndex.clamp(0, b.chapters.length - 1);
       }
+      unawaited(refreshChapterCache(b.id));
       fixed++;
     }
     if (fixed > 0) {

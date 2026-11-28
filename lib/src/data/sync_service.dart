@@ -184,6 +184,7 @@ class SyncService {
         chapters,
         newestFirst: src.bookSourceType == 2,
       );
+      applyCanonicalTitles(sorted);
       final idx = (item['chapterIndex'] as num?)?.toInt() ?? 0;
       store.addOnline(
         Book(

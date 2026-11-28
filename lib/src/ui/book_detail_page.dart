@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -327,6 +327,14 @@ class _BookDetailPageState extends State<BookDetailPage> {
                           fontSize: 15,
                         ),
                       ),
+                      const Spacer(),
+                      _SortToggle(
+                        mode: widget.prefs.chapterOrderMode,
+                        onChanged: (m) {
+                          widget.prefs.setChapterOrderMode(m);
+                          setState(() {});
+                        },
+                      ),
                     ],
                   ),
                 ),
@@ -336,11 +344,17 @@ class _BookDetailPageState extends State<BookDetailPage> {
                 sliver: SliverList.separated(
                   itemCount: book.chapterCount,
                   separatorBuilder: (_, _) => const SizedBox(height: 6),
-                  itemBuilder: (context, index) => _ChapterTile(
-                    book: book,
-                    index: index,
-                    onTap: () => _openChapter(context, book, index),
-                  ),
+                  itemBuilder: (context, i) {
+                    // 倒序只影响「显示」，缓存/下载仍按原索引走
+                    final index = widget.prefs.chapterOrderMode == 'desc'
+                        ? book.chapterCount - 1 - i
+                        : i;
+                    return _ChapterTile(
+                      book: book,
+                      index: index,
+                      onTap: () => _openChapter(context, book, index),
+                    );
+                  },
                 ),
               ),
             ],
@@ -1100,6 +1114,42 @@ class _ChapterTile extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SortToggle extends StatelessWidget {
+  const _SortToggle({required this.mode, required this.onChanged});
+
+  final String mode;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final label = switch (mode) {
+      'desc' => '倒序',
+      'asc' => '正序',
+      _ => '自动',
+    };
+    return TextButton.icon(
+      onPressed: () {
+        final next = switch (mode) {
+          'auto' => 'desc',
+          'desc' => 'asc',
+          _ => 'auto',
+        };
+        onChanged(next);
+      },
+      icon: Icon(
+        mode == 'desc' ? Icons.arrow_downward_rounded : Icons.swap_vert_rounded,
+        size: 18,
+        color: scheme.primary,
+      ),
+      label: Text(
+        '目录$label',
+        style: TextStyle(fontSize: 12, color: scheme.primary),
       ),
     );
   }

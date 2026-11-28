@@ -131,6 +131,9 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   /// 上次自动备份的日期（yyyy-MM-dd，空 = 从没跑过）。
   String lastAutoBackupDay = '';
 
+  /// 目录显示顺序：auto（跟随整理结果）/ asc（正序）/ desc（倒序）。
+  String chapterOrderMode = 'auto';
+
   /// 每日阅读目标（分钟；0 = 不设目标）。
   int dailyGoalMinutes = 0;
 
@@ -447,6 +450,7 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
           autoTrackCache = data['autoTrackCache'] as bool? ?? true;
           cacheLimitMB = (data['cacheLimitMB'] as num?)?.toInt() ?? 2048;
           dailyGoalMinutes = (data['dailyGoalMinutes'] as num?)?.toInt() ?? 0;
+          chapterOrderMode = data['chapterOrderMode'] as String? ?? 'auto';
           autoBackupEnabled = data['autoBackupEnabled'] as bool? ?? false;
           syncBaseUrl = data['syncBaseUrl'] as String? ?? '';
           syncLanUrl = data['syncLanUrl'] as String? ?? '';
@@ -729,6 +733,13 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
   void setLastAutoBackupDay(String day) {
     if (lastAutoBackupDay == day) return;
     lastAutoBackupDay = day;
+    _saveSoon();
+    notifyListeners();
+  }
+
+  void setChapterOrderMode(String mode) {
+    if (chapterOrderMode == mode) return;
+    chapterOrderMode = mode;
     _saveSoon();
     notifyListeners();
   }
@@ -1181,6 +1192,7 @@ class AppPrefs extends ChangeNotifier with ReliablePersistence {
         'autoTrackCache': autoTrackCache,
         'cacheLimitMB': cacheLimitMB,
         'dailyGoalMinutes': dailyGoalMinutes,
+        'chapterOrderMode': chapterOrderMode,
         'autoBackupEnabled': autoBackupEnabled,
         'syncBaseUrl': syncBaseUrl,
         'syncLanUrl': syncLanUrl,

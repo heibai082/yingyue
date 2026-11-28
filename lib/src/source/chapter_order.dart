@@ -27,6 +27,38 @@ int chapterKind(ChapterRef c) {
   return 2;
 }
 
+/// 把章节标题改成统一格式，方便排序/阅读：
+///   `13回` → `第13回`；`第03卷番外` → `第03卷 番外`；`12` → `第12话`。
+/// 认不出的（「序章」「番外1」）原样返回。
+String canonicalChapterTitle(String raw) {
+  final t = raw.trim().replaceAll(RegExp(r'\s+'), ' ');
+  final withPrefix = RegExp(r'^第\s*(\d+(?:\.\d+)?)\s*([卷话話回章節节集部篇])\s*(.*)$')
+      .firstMatch(t);
+  if (withPrefix != null) {
+    final num = withPrefix.group(1)!;
+    final kind = withPrefix.group(2)!;
+    final rest = (withPrefix.group(3) ?? '').trim();
+    return '第$num$kind${rest.isEmpty ? '' : ' $rest'}';
+  }
+  final bare = RegExp(r'^(\d+(?:\.\d+)?)\s*([卷话話回章節节集部篇])?\s*(.*)$')
+      .firstMatch(t);
+  if (bare != null) {
+    final num = bare.group(1)!;
+    final kind = (bare.group(2) ?? '').isEmpty ? '话' : bare.group(2)!;
+    final rest = (bare.group(3) ?? '').trim();
+    return '第$num$kind${rest.isEmpty ? '' : ' $rest'}';
+  }
+  return raw;
+}
+
+/// 批量把目录标题规范化（原地改 title）。
+void applyCanonicalTitles(List<ChapterRef> chapters) {
+  for (final c in chapters) {
+    final fixed = canonicalChapterTitle(c.title);
+    if (fixed != c.title) c.title = fixed;
+  }
+}
+
 /// 归一化目录顺序。
 List<ChapterRef> normalizeChapterOrder(
   List<ChapterRef> chapters, {
