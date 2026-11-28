@@ -105,4 +105,41 @@ void main() {
     final c = ChapterRef(title: '第 42 章 出发', href: 'https://x.com/ch/42');
     expect(chapterNumber(c), 42);
   });
+
+  test('卷 / 话混排：按类型分组，组内序号降序（漫画团这类）', () {
+    final raw = <ChapterRef>[
+      for (final t in [
+        '第10卷',
+        '第09卷',
+        '第08卷',
+        '第41话',
+        '第40话',
+        '第39话',
+        '第07卷',
+        '第38话',
+        '第37话',
+        '第17.5回',
+        '第2话',
+        '第1话',
+      ])
+        ChapterRef(title: t, href: 'https://x/$t'),
+    ];
+    final fixed = normalizeChapterOrder(raw, newestFirst: true);
+    final titles = [for (final c in fixed) c.title];
+    // 卷在前（10→7），话/回在后（41→1）
+    expect(titles.take(4), ['第10卷', '第09卷', '第08卷', '第07卷']);
+    expect(titles[4], '第41话');
+    expect(titles.last, '第1话');
+    // 卷和同号的「话」不会被误去重（这里第7卷与第7话不存在，但同号要能共存）
+  });
+
+  test('同号不同类（第1卷 vs 第1话）都保留', () {
+    final raw = [
+      ChapterRef(title: '第1卷', href: 'https://x/v1'),
+      ChapterRef(title: '第1话', href: 'https://x/c1'),
+      ChapterRef(title: '第1卷', href: 'https://x/v1b'),
+    ];
+    final fixed = normalizeChapterOrder(raw, newestFirst: true);
+    expect(fixed.map((c) => c.title), ['第1卷', '第1话']);
+  });
 }

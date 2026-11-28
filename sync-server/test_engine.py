@@ -54,5 +54,28 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(headers.get("X"), "1")
 
 
+
+    def test_sort_mixed_volume_and_chapter(self):
+        raw = [
+            {"title": t, "url": "u%d" % i}
+            for i, t in enumerate(
+                ["第10卷", "第09卷", "第41话", "第07卷", "第38话", "第2话", "第1话"]
+            )
+        ]
+        out = se.sort_chapters(raw, True)
+        titles = [c["title"] for c in out]
+        self.assertEqual(titles[:3], ["第10卷", "第09卷", "第07卷"])
+        self.assertEqual(titles[3], "第41话")
+        self.assertEqual(titles[-1], "第1话")
+
+    def test_sort_novel_keeps_order_and_dedupes(self):
+        raw = [
+            {"title": t, "url": "n%d" % i}
+            for i, t in enumerate(["第1章", "第2章", "第3章", "第2章"])
+        ]
+        out = se.sort_chapters(raw, False)
+        self.assertEqual([c["title"] for c in out], ["第1章", "第2章", "第3章"])
+
+
 if __name__ == "__main__":
     unittest.main()

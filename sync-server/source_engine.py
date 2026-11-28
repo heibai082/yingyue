@@ -516,6 +516,69 @@ def _html_record(rs, node, base_url):
     }
 
 
+
+# ---------------- 目录排序（卷 / 话 混排的站点） ----------------
+_VOL_RE = re.compile("卷")
+_CHAP_RE = re.compile("[话話回章節节集部篇]")
+_NUM_RE = re.compile(r"第\s*(\d+(?:\.\d+)?)")
+
+
+def _chap_number(title):
+    m = _NUM_RE.search(title or "")
+    if not m:
+        m2 = re.match(r"\s*(\d+(?:\.\d+)?)", title or "")
+        if not m2:
+            return None
+        return float(m2.group(1))
+    return float(m.group(1))
+
+
+def _chap_kind(title):
+    if _VOL_RE.search(title or ""):
+        return 0
+    if _CHAP_RE.search(title or ""):
+        return 1
+    return 2
+
+
+def sort_chapters(chapters, newest_first):
+    """去重 + 排序：漫画按「卷 → 话」分组，组内按序号降序；小说只去重。"""
+    if len(chapters) < 2:
+        return chapters
+    nums = [_chap_number(c.get("title", "")) for c in chapters]
+    known = sum(1 for n in nums if n is not None)
+    if known < len(chapters) * 0.8:
+        return chapters
+    kept = []
+    seen_keys = set()
+    seen_urls = set()
+    for c, n in zip(chapters, nums):
+        if n is not None:
+            key = (_chap_kind(c.get("title", "")), n)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            kept.append((c, n))
+        else:
+            u = c.get("url") or ""
+            if u and u in seen_urls:
+                continue
+            if u:
+                seen_urls.add(u)
+            kept.append((c, -1.0))
+    if not newest_first:
+        return [c for c, _ in kept]
+    indexed = list(enumerate(kept))
+    indexed.sort(
+        key=lambda pair: (
+            _chap_kind(pair[1][0].get("title", "")),
+            -pair[1][1],
+            pair[0],
+        )
+    )
+    return [c for _, (c, _n) in indexed]
+
+
 def fetch_toc(source, book_url, timeout=20):
     session = SourceSession(source)
     text, final_url, _, _ = session.fetch(book_url, timeout=timeout)
@@ -531,6 +594,7 @@ def fetch_toc(source, book_url, timeout=20):
         href = _pick(url_rule or "tag.a@href", n, final_url)
         if title and href:
             chapters.append({"title": title, "url": href})
+    chapters = sort_chapters(chapters, source.get("bookSourceType") == 2)
     return {"title": "", "chapters": chapters, "finalUrl": final_url}
 
 

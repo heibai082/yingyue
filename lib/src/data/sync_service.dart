@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../platform/native_bridge.dart';
+import '../source/chapter_order.dart';
 import '../source/models.dart';
 import '../source/source_store.dart';
 import 'book_store.dart';
@@ -179,6 +180,10 @@ class SyncService {
         chapters.add(ChapterRef(title: title, href: url));
       }
       if (chapters.isEmpty) continue;
+      final sorted = normalizeChapterOrder(
+        chapters,
+        newestFirst: src.bookSourceType == 2,
+      );
       final idx = (item['chapterIndex'] as num?)?.toInt() ?? 0;
       store.addOnline(
         Book(
@@ -188,8 +193,8 @@ class SyncService {
           format: BookFormat.online,
           path: path,
           sourceUrl: (meta['sourceUrl'] ?? '').toString(),
-          chapters: chapters,
-          chapterIndex: idx.clamp(0, chapters.length - 1),
+          chapters: sorted,
+          chapterIndex: idx.clamp(0, sorted.length - 1),
           lastReadAt: (item['lastReadAt'] as num?)?.toInt() ?? 0,
         ),
       );

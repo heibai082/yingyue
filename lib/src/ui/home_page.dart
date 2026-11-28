@@ -74,6 +74,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     // 全局下载队列拿到书架（详情页 / 批量缓存都往这里排队）
     DownloadCenter.instance.bind(widget.store);
+    // 老书的目录顺序（卷/话混排）也顺手修一遍
+    widget.store.normalizeAllChapterOrders();
     // 崩溃日志落盘（设置里可导出）
     CrashLog.install(File('${widget.store.appDirs.files}/logs/crash.log'));
     // 同步服务器：变化推送 + 启动拉取（0.52）

@@ -491,6 +491,52 @@ class BookStore extends ChangeNotifier with ReliablePersistence {
   }
 
   /// 加入一本在线书籍（同一书页地址已存在时直接返回已有条目）。
+  /// 把书架里所有在线书的目录顺序归一化（卷/话混排、最新话前置都会修）。
+  ///
+  /// 会尽量保持当前读到的那一章不变（按标题找新位置）。
+  /// 返回修过的书数量。
+  int normalizeAllChapterOrders() {
+    var fixed = 0;
+    for (final b in _books) {
+      if (b.format != BookFormat.online || b.chapters.length < 2) continue;
+      final newest = looksNewestFirst(b.chapters);
+      final sorted = normalizeChapterOrder(b.chapters, newestFirst: newest);
+      if (sorted.length == b.chapters.length &&
+          _sameOrder(b.chapters, sorted)) {
+        continue;
+      }
+      final current = b.chapterIndex >= 0 && b.chapterIndex < b.chapters.length
+          ? b.chapters[b.chapterIndex]
+          : null;
+      b.chapters
+        ..clear()
+        ..addAll(sorted);
+      if (current != null) {
+        final i = b.chapters.indexWhere(
+          (c) => c.title == current.title && c.href == current.href,
+        );
+        b.chapterIndex = i >= 0
+            ? i
+            : b.chapterIndex.clamp(0, b.chapters.length - 1);
+      } else {
+        b.chapterIndex = b.chapterIndex.clamp(0, b.chapters.length - 1);
+      }
+      fixed++;
+    }
+    if (fixed > 0) {
+      _saveSoon();
+      notifyListeners();
+    }
+    return fixed;
+  }
+
+  static bool _sameOrder(List<ChapterRef> a, List<ChapterRef> b) {
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].title != b[i].title || a[i].href != b[i].href) return false;
+    }
+    return true;
+  }
+
   Book addOnline(Book book) {
     final existing = onlineByPath(book.path);
     if (existing != null) return existing;
